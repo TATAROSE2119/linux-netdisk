@@ -52,7 +52,42 @@ int register_user(const char *username, const char *password) {
 }
 
 int login_user(const char *username, const char *password) {
+    int sockfd;
+    struct sockaddr_in server_addr;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, server_IP, &server_addr.sin_addr);
 
+    connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    char cmd = 'L';
+    write(sockfd, &cmd, 1);
+
+    // 发送用户名长度和用户名
+    int ulen = strlen(username);
+    int ulen_net = htonl(ulen);
+    write(sockfd, &ulen_net, 4);
+    write(sockfd, username, ulen);
+
+    // 发送密码长度和密码
+    int plen = strlen(password);
+    int plen_net = htonl(plen);
+    write(sockfd, &plen_net, 4);
+    write(sockfd, password, plen);
+
+    // 接收服务器返回
+    char res;
+    read(sockfd, &res, 1);
+    close(sockfd);
+
+    if(res == 1) {
+        printf("Login successful!\n");
+        strcpy(g_username, username); // 保存用户名
+        return 1;
+    } else {
+        printf("Login failed! Wrong username or password.\n");
+        return 0;
+    }
 }
 
 void upload_file(const char *filename) {
@@ -199,7 +234,9 @@ int main() {
         else if (strcmp(cmd, "login") == 0) {
             char user[64], pass[64];
             scanf("%s%s", user, pass);
-            if (login_user(user, pass)) strcpy(g_username, user);
+            if (login_user(user, pass)){
+                strcpy(g_username, user);
+            }
         }
         else if (strcmp(cmd, "upload") == 0) {
             char filename[256];
