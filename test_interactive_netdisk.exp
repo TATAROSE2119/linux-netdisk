@@ -1,0 +1,59 @@
+#!/usr/bin/expect
+
+set timeout 10
+
+set CLIENT_BIN "./client/client"
+set USER "testuser"
+set PASS "testpass"
+set UPFILE "test_up.txt"
+set DOWNFILE "test_down.txt"
+set CONTENT "Netdisk Interactive Test!"
+
+# 创建本地上传测试文件
+exec sh -c "echo '$CONTENT' > $UPFILE"
+
+spawn $CLIENT_BIN
+
+expect "Netdisk> "
+send "register $USER $PASS\r"
+expect {
+    "Register successful" { send_user "--注册成功--\n" }
+    "Register failed"    { send_user "--注册失败(用户名可能已存在)--\n" }
+}
+expect "Netdisk> "
+send "login $USER $PASS\r"
+expect {
+    "Login successful"   { send_user "--登录成功--\n" }
+    "Login failed"       { send_user "--登录失败--\n" }
+}
+expect "Netdisk> "
+send "upload $UPFILE\r"
+expect {
+    "File uploaded successfully" { send_user "--上传成功--\n" }
+    "请先登录"                  { send_user "--未登录上传--\n" }
+}
+expect "Netdisk> "
+# 先清空本地同名下载文件
+exec rm -f $DOWNFILE
+send "download $DOWNFILE\r"
+expect {
+    "File downloaded successfully" { send_user "--下载成功--\n" }
+    "File not found"               { send_user "--下载文件不存在--\n" }
+}
+expect "Netdisk> "
+
+# 检查上传下载内容是否一致
+set diff [exec diff $UPFILE $DOWNFILE]
+if {$diff eq ""} {
+    send_user "--上传和下载内容一致✅--\n"
+} else {
+    send_user "--上传和下载内容不一致❌--\n"
+}
+
+send "logout\r"
+expect "Netdisk> "
+send "exit\r"
+expect eof
+
+# 清理测试文件
+exec rm -f $UPFILE $DOWNFILE

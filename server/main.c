@@ -5,10 +5,27 @@
 #include <arpa/inet.h>// For inet_ntoa
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sqlite3.h>// For SQLite database operations
+#include <sys/stat.h> // For mkdir
+#include <sys/types.h> // For ssize_t
 
 #define PORT 9000
 
 int main(){
+    // Initialize SQLite database connection
+    sqlite3 *db;
+    int rc = sqlite3_open("netdisk.db", &db);
+    if(rc){
+        fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
+        exit(EXIT_FAILURE);
+    }
+    const char *sql="CREATE TABLE IF NOT EXISTS users("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "username TEXT UNIQUE, "
+                    "password TEXT);";
+    sqlite3_exec(db, sql, 0, 0, 0);
+
+
     int listen_fd, conn_fd;
     struct sockaddr_in server_addr, cli_addr;// Server and client address structures
 
@@ -48,34 +65,163 @@ int main(){
         //简单菜单：先收指令
         char cmd;
         read(conn_fd,&cmd, sizeof(cmd));
+
+        if(cmd=='R'){//注册
+            //1.读取用户名长度和用户名
+            int ulen_net,plen_net; // Network byte order for username and password lengths
+            read(conn_fd, &ulen_net, sizeof(ulen_net));
+            int ulen = ntohl(ulen_net); // Convert to host byte order
+            char username[ulen + 1]; // +1 for null terminator
+            read(conn_fd, username, ulen);
+            username[ulen] = '\0'; // Null-terminate the string
+
+            //2.读取密码长度和密码
+            read(conn_fd, &plen_net, sizeof(plen_net));
+            int plen = ntohl(plen_net); // Convert to host byte order
+            char password[plen + 1]; // +1 for null terminator
+            read(conn_fd, password, plen);
+            password[plen] = '\0'; // Null-terminate the string
+
+            //3.插入数据到数据库
+            sqlite3_stmt *stmt;// Prepare SQL statement
+            const char *sql= "INSERT INTO users (username, password) VALUES (?, ?);";
+            if(sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK){
+                sqlite3_bind_text(stmt,1,username,-1, SQLITE_STATIC);
+                sqlite3_bind_text(stmt,2,password,-1, SQLITE_STATIC);
+                char res=1;
+                if(sqlite3_step(stmt) ==SQLITE_DONE){// Execute the statement
+                    //注册成功 创建用户目录
+                    char path[256];
+                    snprintf(path, sizeof(path), "netdisk_data/%s", username);// Create user directory
+                    mkdir("netdisk_data",0755); // Create directory with permissions
+                    mkdir(path, 0755); // Create user directory with permissions
+                    res=1; // Registration successful
+                }else{
+                    res=0; // Registration failed
+                }
+                write(conn_fd, &res, sizeof(res)); // Send registration result to client
+                sqlite3_finalize(stmt); // Finalize the statement
+            }
+            close(conn_fd); // Close the connection
+            continue; // Continue to accept next connection
+        }
+        else if(cmd=='L'){//登录
+            //1.读取用户名和密码
+            int ulen_net, plen_net; // Network byte order for username and password 
+            read(conn_fd, &ulen_net, sizeof(ulen_net));
+            int ulen = ntohl(ulen_net); // Convert to host byte order
+            char username[ulen + 1]; // +1 for null terminator
+            read(conn_fd, username, ulen);
+            username[ulen] = '\0'; // Null-terminate the string
+
+            read(conn_fd, &plen_net, sizeof(plen_net));
+            int plen = ntohl(plen_net); // Convert to host byte order
+            char password[plen + 1]; // +1 for null terminator
+            read(conn_fd, password, plen);
+            password[plen] = '\0'; // Null-terminate the string 
+
+            //2.查询数据库验证用户
+            sqlite3_stmt *stmt;
+            const char *sql = "SELECT * FROM users WHERE username = ? AND password = ?;";
+            if(sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK){
+                sqlite3_bind_text(stmt, 1, username, -1,SQLITE_STATIC);
+                char res = 0; // Default to login failure
+                if(sqlite3_step(stmt) == SQLITE_ROW){ // Check if user exists
+                    const char *db_password = (const char *)sqlite3_column_text(stmt, 2); // Get password from database
+                    if(strcmp(db_password, password) == 0){ // Password matches
+                        res = 1; // Login successful
+                        printf("User %s logged in successfully ✅\n", username);
+                    } else {
+                        printf("Login failed for user %s ❌\n", username);
+                    }
+                }
+                write(conn_fd, &res, sizeof(res)); // Send login result to client
+                sqlite3_finalize(stmt); // Finalize the statement
+            }
+            close(conn_fd); // Close the connection
+            continue; // Continue to accept next connection
+        }
+
+
         if(cmd=='U'){// 上传文件
-            FILE *fp=fopen("server_recv.txt", "wb");// Open file for writing
+            //1.读取用户名长度
+            int ulen_net;
+            read(conn_fd, &ulen_net, sizeof(ulen_net));
+            int ulen = ntohl(ulen_net); // Convert to host byte order
+            char username[ulen + 1]; // +1 for null terminator
+            read(conn_fd, username, ulen);
+            username[ulen] = '\0'; // Null-terminate the string
+
+            //1.读取文件名长度
+            int name_len_net;// Network byte order for file name length
+            read(conn_fd,&name_len_net, sizeof(name_len_net));
+            int name_len=ntohl(name_len_net); // Convert to host byte order
+
+            //2.读取文件名
+            char filename[name_len + 1]; // +1 for null terminator
+            read(conn_fd, filename, name_len);
+            filename[name_len] = '\0'; // Null-terminate the string
+
+            //拼接专属用户目录
+            char filepath[256];
+            snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+
+            //3.用文件名创建文件
+            FILE *fp=fopen(filename,"wb"); // Open file for writing
             if(fp == NULL) {
-                perror("File open error❌");
-                close(conn_fd);
+                perror("File creation error❌");
+                close(conn_fd); // Close the connection
                 continue; // Continue to accept next connection
             }
-            while( (n=read(conn_fd,buffer,sizeof(buffer))) >0){
-                fwrite(buffer, sizeof(char), n, fp); // Write data to file
+            while((n=read(conn_fd,buffer,sizeof(buffer)))>0){
+                fwrite(buffer,sizeof(char),n,fp);
             }
-            printf("File uploaded successfully as server_recv.txt! ✅\n");
-            fclose(fp); // Close the file
+            printf("File upload successfully as %s ✅\n ",filename);
+            fclose(fp);
         }
         else if(cmd=='D'){// 下载文件
-            FILE *fp=fopen("server_recv.txt", "rb");// Open file for reading
+            //1.读取用户名长度
+            int ulen_net;
+            read(conn_fd, &ulen_net, sizeof(ulen_net));
+            int ulen = ntohl(ulen_net); // Convert to host byte order   
+            char username[ulen + 1]; // +1 for null terminator
+            read(conn_fd, username, ulen);
+            username[ulen] = '\0'; // Null-terminate the string
+
+            //1.读取文件名长度
+            int name_len_net;
+            read(conn_fd, &name_len_net, sizeof(name_len_net));
+            int name_len = ntohl(name_len_net); // Convert to host byte order
+
+            //2.读取文件名
+            char filename[name_len + 1]; // +1 for null terminator
+            read(conn_fd, filename, name_len);
+            filename[name_len] = '\0'; // Null-terminate the string
+
+            //拼接专属用户目录
+            char filepath[256];
+            snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+
+            //3.打开文件
+            FILE *fp = fopen(filename, "rb"); // Open file for reading
+            char flag=1; // Flag to check if file exists
             if(fp == NULL) {
-                perror("File open error❌");
-                close(conn_fd);
+                flag = 0; // File not found
+                write(conn_fd, &flag, sizeof(flag)); // Send file exists flag
+                perror("File not found❌");
+                close(conn_fd); // Close the connection
                 continue; // Continue to accept next connection
             }
-            while((n=fread(buffer,1, sizeof(buffer), fp))>0){// Read data from file
-                write(conn_fd, buffer, n); // Send data to client
-            } 
-            printf("File server_recv.txt send to client successfully! ✅\n");
-            fclose(fp); // Close the file
+            write(conn_fd, &flag, sizeof(flag)); // Send file exists flag
+            while((n = fread(buffer, sizeof(char), sizeof(buffer), fp)) > 0) {
+                write(conn_fd, buffer, n); // Send file data to client
+            }
+            printf("File download successfully as %s ✅\n", filename);
+            fclose(fp);
         }
         close(conn_fd); // Close the connection
     }
     close(listen_fd); // Close the listening socket
+    sqlite3_close(db); // Close the SQLite database connection
     return 0;
 }
