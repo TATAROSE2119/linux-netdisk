@@ -1,0 +1,20 @@
+#!/usr/bin/expect
+
+set timeout 60
+set user $argv
+set upfile "file$user.bin"
+set downfile "down$user.bin"
+
+spawn ./client/client
+
+expect "Netdisk> "
+send "register user$user pass\r"
+expect "Netdisk> "
+send "login user$user pass\r"
+expect "Netdisk> "
+send "upload $upfile\r"
+expect "Netdisk> "
+send "download $upfile\r"
+expect "Netdisk> "
+send "exit\r"
+expect eof

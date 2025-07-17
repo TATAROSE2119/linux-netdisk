@@ -1,7 +1,7 @@
 # 编译器和编译选项
 CC = gcc
 CFLAGS = -Wall -O2
-LDFLAGS = -lsqlite3
+LDFLAGS = -lsqlite3 -lssl -lcrypto -lpthread
 
 # 目标文件
 SERVER = server/server
@@ -31,7 +31,7 @@ debug: all
 # 清理目标
 clean:
 	rm -f $(SERVER) $(CLIENT) $(SERVER_OBJS) $(CLIENT_OBJS)
-	rm -f server/server_recv.txt client/*.txt *.txt
+	rm -f server/server_recv.txt client/*.txt *.txt *.bin
 
 # 完全清理（包括数据库和用户文件）
 distclean: clean
