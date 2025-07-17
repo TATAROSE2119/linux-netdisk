@@ -119,12 +119,15 @@ int main(){
             char password[plen + 1]; // +1 for null terminator
             read(conn_fd, password, plen);
             password[plen] = '\0'; // Null-terminate the string 
+            printf("[DEBUG] Received username: '%s', password: '%s'\n", username, password);
+
 
             //2.查询数据库验证用户
             sqlite3_stmt *stmt;
             const char *sql = "SELECT * FROM users WHERE username = ? AND password = ?;";
             if(sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK){
                 sqlite3_bind_text(stmt, 1, username, -1,SQLITE_STATIC);
+                sqlite3_bind_text(stmt, 2, password, -1, SQLITE_STATIC);
                 char res = 0; // Default to login failure
                 if(sqlite3_step(stmt) == SQLITE_ROW){ // Check if user exists
                     const char *db_password = (const char *)sqlite3_column_text(stmt, 2); // Get password from database

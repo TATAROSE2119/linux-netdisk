@@ -75,6 +75,9 @@ int login_user(const char *username, const char *password) {
     write(sockfd, &plen_net, 4);
     write(sockfd, password, plen);
 
+    printf("[DEBUG] Sending username: '%s', password: '%s'\n", username, password);
+
+
     // 接收服务器返回
     char res;
     read(sockfd, &res, 1);
