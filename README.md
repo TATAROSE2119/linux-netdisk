@@ -151,3 +151,81 @@ if(bind(listen_fd,(struct sockaddr *)&server_addr, sizeof(server_addr))<0){
 
 接下来时简单的监听过程的实现：只支持上传和下载对应文件
 
+`server/main.c`:
+
+```mermaid
+flowchart TD
+    StartMain(["程序启动"])
+    InitDB(["初始化数据库<br>（创建users表）"])
+    CreateSocket(["创建监听套接字"])
+    BindListen(["绑定端口并监听"])
+    WaitClient(["循环等待客户端连接"])
+    AcceptConn(["接收客户端连接"])
+    SpawnThread(["为每个连接创建线程"])
+    HandleClient(["子线程处理客户端请求"])
+
+    %% 主流程
+    StartMain --> InitDB
+    InitDB --> CreateSocket
+    CreateSocket --> BindListen
+    BindListen --> WaitClient
+    WaitClient --> AcceptConn
+    AcceptConn --> SpawnThread
+    SpawnThread --> HandleClient
+
+    %% 线程处理流程
+    subgraph Client处理线程
+        OpenThreadDB(["打开本地数据库连接"])
+        ReadCmd(["读取客户端命令"])
+        Decision{注册/登录/上传/下载?}
+        CloseThread(["关闭数据库和连接"])
+        
+        HandleClient --> OpenThreadDB
+        OpenThreadDB --> ReadCmd
+        ReadCmd --> Decision
+
+        %% 注册流程
+        Decision -- "注册<br>(R)" --> Reg_ReadUser(["读取用户名和密码"])
+        Reg_ReadUser --> Reg_InsertDB(["插入数据库并哈希密码"])
+        Reg_InsertDB --> Reg_CreateDir(["创建用户文件夹"])
+        Reg_CreateDir --> Reg_SendResult(["返回注册结果"])
+        Reg_SendResult --> CloseThread
+
+        %% 登录流程
+        Decision -- "登录<br>(L)" --> Login_ReadUser(["读取用户名和密码"])
+        Login_ReadUser --> Login_QueryDB(["查询数据库并校验密码"])
+        Login_QueryDB --> Login_SendResult(["返回登录结果"])
+        Login_SendResult --> CloseThread
+
+        %% 上传流程
+        Decision -- "上传<br>(U)" --> Upload_ReadMeta(["读取用户名和文件名"])
+        Upload_ReadMeta --> Upload_RecvFile(["接收并保存文件"])
+        Upload_RecvFile --> CloseThread
+
+        %% 下载流程
+        Decision -- "下载<br>(D)" --> Download_ReadMeta(["读取用户名和文件名"])
+        Download_ReadMeta --> Download_FindFile(["查找并读取文件"])
+        Download_FindFile --> Download_SendFile(["发送文件数据"])
+        Download_SendFile --> CloseThread
+    end
+
+    %% 说明节点
+    classDef note fill:#F6F6F6,stroke:#B1B1B1,stroke-dasharray: 5 5;
+    class StartMain,InitDB,CreateSocket,BindListen,WaitClient,AcceptConn,SpawnThread,HandleClient note;
+    class OpenThreadDB,ReadCmd,Decision,CloseThread,Reg_ReadUser,Reg_InsertDB,Reg_CreateDir,Reg_SendResult note;
+    class Login_ReadUser,Login_QueryDB,Login_SendResult note;
+    class Upload_ReadMeta,Upload_RecvFile note;
+    class Download_ReadMeta,Download_FindFile,Download_SendFile note;
+
+    %% 关键解释说明
+    click InitDB "javascript:void(0);" "【说明】只在主线程执行一次，用于存储用户信息"
+    click HandleClient "javascript:void(0);" "【说明】每个客户端请求独立线程处理，互不影响"
+    click Reg_InsertDB "javascript:void(0);" "【说明】密码存储采用SHA-256哈希，提升安全性"
+    click Reg_CreateDir "javascript:void(0);" "【说明】为每个用户分配独立文件夹"
+    click Login_QueryDB "javascript:void(0);" "【说明】比对密码时先对明文密码做哈希"
+    click Upload_RecvFile "javascript:void(0);" "【说明】循环接收文件块并写入磁盘"
+    click Download_FindFile "javascript:void(0);" "【说明】如找不到文件则立即返回失败"
+
+
+```
+

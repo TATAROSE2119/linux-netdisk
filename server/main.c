@@ -10,6 +10,7 @@
 #include <sys/types.h> // For ssize_t
 #include <openssl/sha.h>// For SHA-256 hashing
 #include <pthread.h> // For multithreading
+#include <dirent.h> // For directory operations
 
 #define PORT 9000
 
@@ -188,10 +189,80 @@ void * handle_client(void *arg) {
         }
         printf("File download successfully as %s ✅\n", filename);
         fclose(fp);
+    } else if(cmd == 'F') { // 获取文件列表
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 拼接用户目录
+        char userdir[256];
+        snprintf(userdir, sizeof(userdir), "netdisk_data/%s", username);
+
+        // 列出文件
+        DIR *dir = opendir(userdir);
+        if (dir == NULL) {
+            char res = 0;
+            write(conn_fd, &res, sizeof(res));
+            close(conn_fd);
+            pthread_exit(NULL);
+        }
+        char res = 1;
+        write(conn_fd, &res, sizeof(res));
+
+        struct dirent *entry;
+        int file_count = 0;
+        while ((entry = readdir(dir)) != NULL) {
+            if (entry->d_type == DT_REG) file_count++;
+        }
+        rewinddir(dir);
+        int file_count_net = htonl(file_count);
+        write(conn_fd, &file_count_net, sizeof(file_count_net));
+
+        while ((entry = readdir(dir)) != NULL) {
+            if (entry->d_type == DT_REG) {
+                int name_len = strlen(entry->d_name);
+                int name_len_net = htonl(name_len);
+                write(conn_fd, &name_len_net, sizeof(name_len_net));
+                write(conn_fd, entry->d_name, name_len);
+            }
+        }
+        closedir(dir);
+        close(conn_fd);
+        pthread_exit(NULL);
+    } else if(cmd == 'X') { // 删除文件
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 读取文件名
+        int name_len_net;
+        read(conn_fd, &name_len_net, sizeof(name_len_net));
+        int name_len = ntohl(name_len_net);
+        char filename[name_len + 1];
+        read(conn_fd, filename, name_len);
+        filename[name_len] = '\0';
+
+        // 拼接文件路径
+        char filepath[256];
+        snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+
+        // 删除文件
+        char res = (remove(filepath) == 0) ? 1 : 0;
+        write(conn_fd, &res, sizeof(res));
+        close(conn_fd);
+        pthread_exit(NULL);
     }
 
-    //3.关闭连接
-    sqlite3_close(db); // Close the SQLite database connection
+    // 关闭连接
+    sqlite3_close(db);
     close(conn_fd); // Close the connection
     pthread_exit(NULL); // Exit the thread
 }

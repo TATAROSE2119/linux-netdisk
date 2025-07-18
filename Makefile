@@ -1,7 +1,7 @@
 # 编译器和编译选项
 CC = gcc
 CFLAGS = -Wall -O2
-LDFLAGS = -lsqlite3 -lssl -lcrypto -lpthread
+LDFLAGS = -lsqlite3 -lssl -lcrypto -lpthread -lwebsockets
 
 # 目标文件
 SERVER = server/server
