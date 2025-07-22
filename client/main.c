@@ -3,6 +3,11 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <readline/readline.h>
+#include <readline/history.h>
+#include <ctype.h> // For isspace()
 
 #define PORT 9000
 #define server_IP "192.168.50.153"
@@ -93,57 +98,50 @@ int login_user(const char *username, const char *password) {
     }
 }
 
-void upload_file(const char *filename) {
-    if(strlen(g_username) == 0) {
-        printf("You must login first!❌.\n");
-        return;
+void upload_file(const char *filepath) {
+    int sockfd = connect_to_server();
+    if (sockfd < 0) return;
+
+    // 从完整路径中提取文件名 (basename)
+    const char *filename = strrchr(filepath, '/');
+    if (filename == NULL) {
+        filename = filepath; // 路径中没有'/'，本身就是文件名
+    } else {
+        filename++; // 指向'/'后面的字符
     }
 
-    int sockfd;
-    struct sockaddr_in server_addr;// Server address structure
-    char buffer[1024];
-    ssize_t n;
-
-    sockfd=socket(AF_INET, SOCK_STREAM, 0);// Create a socket
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT); // Set port number
-    inet_pton(AF_INET, server_IP, &server_addr.sin_addr); // Convert IP
-
-    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Connection failed ❌");
+    FILE *fp = fopen(filepath, "rb");
+    if (fp == NULL) {
+        printf("❌ 错误: 无法打开本地文件 '%s'\n", filepath);
         close(sockfd);
         return;
     }
-    char cmd ='U'; // Command for upload
-    write(sockfd, &cmd, sizeof(cmd)); // Send command to server
-    //1.发送用户名长度
+
+    char cmd = 'U';
+    write(sockfd, &cmd, sizeof(cmd));
+
     int ulen = strlen(g_username);
-    int ulen_net = htonl(ulen); // Convert to network byte order
+    int ulen_net = htonl(ulen);
     write(sockfd, &ulen_net, sizeof(ulen_net));
-    write(sockfd, g_username, ulen); // Send username
+    write(sockfd, g_username, ulen);
 
-    //1.发送文件名长度
     int name_len = strlen(filename);
-    int name_len_net = htonl(name_len); // Convert to network byte order
+    int name_len_net = htonl(name_len);
     write(sockfd, &name_len_net, sizeof(name_len_net));
-
-    //2.发送文件名
     write(sockfd, filename, name_len);
 
-    //3.发送文件内容
-    FILE *fp = fopen(filename, "rb"); // Open file for reading
-    if(!fp){
-        perror("File open error❌");
-        close(sockfd);  
-        return;
+    char buffer[4096];
+    size_t n;
+    while ((n = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
+        if (write(sockfd, buffer, n) < 0) {
+            perror("Socket write error");
+            break;
+        }
     }
-    while((n=fread(buffer, sizeof(char), sizeof(buffer), fp))>0){
-        write(sockfd, buffer, n); // Send data to server
-    }
+
     fclose(fp);
     close(sockfd);
-    printf("File uploaded successfully✅.\n");
-
+    printf("✅ 文件 '%s' 作为 '%s' 上传成功。\n", filepath, filename);
 }
 
 void download_file(const char *filename) {
@@ -256,86 +254,189 @@ void send_delete_file(int sockfd, const char* username, const char* filename) {
     else printf("[删除] 文件 '%s' 删除失败！\n", filename);
 }
 
+// 命令列表
+char* commands[] = {
+    "register", "login", "upload", "download", "list", "delete", "exit", "help", NULL
+};
+
+// 补全回调函数
+char* command_generator(const char* text, int state) {
+    static int list_index, len;
+    char* name;
+
+    if (!state) {// 如果状态为0
+        list_index = 0;// 重置索引
+        len = strlen(text);// 获取输入长度
+    }
+
+    while ((name = commands[list_index++])) {// 遍历命令列表
+        if (strncmp(name, text, len) == 0) {// 比较命令和输入
+            return strdup(name);// 返回补全结果  strdup 函数用于复制字符串
+        }
+    }
+    return NULL;
+}
+
+// 补全函数
+char** command_completion(const char* text, int start, int end) {
+    // 如果这是行中的第一个词，则进行命令补全
+    int i = 0;
+    while (i < start && isspace(rl_line_buffer[i])) {
+        i++;
+    }
+
+    if (i == start) {
+        return rl_completion_matches(text, command_generator);
+    }
+
+    // 否则，返回NULL，让readline使用默认的文件名补全
+    return NULL;
+}
+
+int connect_to_server() {
+    int sockfd;
+    struct sockaddr_in server_addr;
+
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("Socket creation failed ❌");
+        return -1;
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    if (inet_pton(AF_INET, server_IP, &server_addr.sin_addr) <= 0) {
+        perror("Invalid address/ Address not supported ❌");
+        close(sockfd);
+        return -1;
+    }
+
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection failed ❌");
+        close(sockfd);
+        return -1;
+    }
+    return sockfd;
+}
+
+
 int main() {
-    char cmd[128];
+    // 将rl_attempted_completion_function指向新的智能补全函数
+    rl_attempted_completion_function = command_completion; 
 
-    printf("欢迎使用 C 语言网盘客户端！输入 help 查看命令。\n");
+    // main 函数中的命令处理循环保持不变，它已经可以正确传递参数了
+    char* line;
+    printf("欢迎使用 C 语言网盘客户端！输入 help 查看命令，按 Tab 自动补全。\n");
 
-    while (1) {
-        printf("\n1. 注册\n2. 登录\n3. 上传文件\n4. 下载文件\n5. 文件列表\n6. 删除文件\n0. 退出\n选择: ");
-        int choice; scanf("%d", &choice); getchar();
-        if(choice == 0) break;
-        else if(choice == 1) {
-            char user[64], pass[64];
-            scanf("%s%s", user, pass);
-            register_user(user, pass);
+    while ((line = readline("Netdisk> ")) != NULL) {
+        if (strlen(line) > 0) {
+            add_history(line);
         }
-        else if(choice == 2) {
-            char user[64], pass[64];
-            scanf("%s%s", user, pass);
-            if (login_user(user, pass)){
-                strcpy(g_username, user);
-            }
+
+        char* line_copy = strdup(line);
+        char* cmd = strtok(line_copy, " \t\n");
+
+        if (!cmd) {
+            free(line);
+            free(line_copy);
+            continue;
         }
-        else if(choice == 3) {
-            char filename[256];
-            scanf("%s", filename);
-            if (strlen(g_username) == 0)
-                printf("请先登录！\n");
-            else
-                upload_file(filename);
-        }
-        else if(choice == 4) {
-            char filename[256];
-            scanf("%s", filename);
-            if (strlen(g_username) == 0)
-                printf("请先登录！\n");
-            else
-                download_file(filename);
-        }
-        else if(choice == 5) {
-            if(strlen(g_username) == 0) {
+
+        if (strcmp(cmd, "help") == 0) {
+            printf("命令列表:\n");
+            printf("  register <user> <pass>  - 注册新用户\n");
+            printf("  login <user> <pass>     - 登录账户\n");
+            printf("  upload <local_file>     - 上传文件\n");
+            printf("  download <remote_file>  - 下载文件\n");
+            printf("  list                      - 查看文件列表\n");
+            printf("  delete <file1> [file2..] - 删除一个或多个文件\n");
+            printf("  exit                      - 退出程序\n");
+        } else if (strcmp(cmd, "delete") == 0) {
+            if (strlen(g_username) == 0) {
                 printf("请先登录！\n");
             } else {
-                int sockfd;
-                struct sockaddr_in server_addr;
-                sockfd = socket(AF_INET, SOCK_STREAM, 0);
-                server_addr.sin_family = AF_INET;
-                server_addr.sin_port = htons(PORT);
-                inet_pton(AF_INET, server_IP, &server_addr.sin_addr);
-                if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-                    perror("Connection failed ❌");
-                    close(sockfd);
-                    return;
+                char* filename = strtok(NULL, " \t\n");
+                if (!filename) {
+                    printf("Usage: delete <file1> [file2] ...\n");
                 }
-                send_list_files(sockfd, g_username);
-                close(sockfd);
+                while (filename) {
+                    int sockfd = connect_to_server();
+                    if (sockfd >= 0) {
+                        send_delete_file(sockfd, g_username, filename);
+                        close(sockfd);
+                    }
+                    filename = strtok(NULL, " \t\n");
+                }
             }
-        } else if(choice == 6) {
-            if(strlen(g_username) == 0) {
-                printf("请先登录！\n");
-            } else {
-                char filename[256];
-                printf("输入要删除的文件名: ");
-                fgets(filename, sizeof(filename), stdin);
-                filename[strcspn(filename, "\n")] = 0;
-                int sockfd;
-                struct sockaddr_in server_addr;
-                sockfd = socket(AF_INET, SOCK_STREAM, 0);
-                server_addr.sin_family = AF_INET;
-                server_addr.sin_port = htons(PORT);
-                inet_pton(AF_INET, server_IP, &server_addr.sin_addr);
-                if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-                    perror("Connection failed ❌");
-                    close(sockfd);
-                    return;
+        } 
+        else {
+             // 保持原有逻辑，但用 strtok 获取参数
+             char* arg1 = strtok(NULL, " \t\n");
+             char* arg2 = strtok(NULL, " \t\n");
+            if (strcmp(cmd, "register") == 0) {
+                if (strlen(arg1) > 0 && strlen(arg2) > 0) {
+                    register_user(arg1, arg2);
+                } else {
+                    printf("Usage: register <username> <password>\n");
                 }
-                send_delete_file(sockfd, g_username, filename);
-                close(sockfd);
+            }
+            else if (strcmp(cmd, "login") == 0) {
+                if (strlen(arg1) > 0 && strlen(arg2) > 0) {
+                    
+                    login_user(arg1, arg2);
+                } else {
+                    printf("Usage: login <username> <password>\n");
+                }
+            }
+            else if (strcmp(cmd, "upload") == 0) {
+                if (strlen(g_username) == 0) {
+                    printf("请先登录！\n");
+                } else {
+                    if (strlen(arg1) > 0) {
+                        upload_file(arg1);
+                    } else {
+                        printf("Usage: upload <filename>\n");
+                    }
+                }
+            }
+            else if (strcmp(cmd, "download") == 0) {
+                if (strlen(g_username) == 0) {
+                    printf("请先登录！\n");
+                } else {
+                    if (strlen(arg1) > 0) {
+                        download_file(arg1);
+                    } else {
+                        printf("Usage: download <filename>\n");
+                    }
+                }
+            }
+            else if (strcmp(cmd, "list") == 0) {
+                if(strlen(g_username) == 0) {
+                    printf("请先登录！\n");
+                } else {
+                    int sockfd;
+                    struct sockaddr_in server_addr;
+                    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+                    server_addr.sin_family = AF_INET;
+                    server_addr.sin_port = htons(PORT);
+                    inet_pton(AF_INET, server_IP, &server_addr.sin_addr);
+                    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+                        perror("Connection failed ❌");
+                        close(sockfd);
+                        return;
+                    }
+                    send_list_files(sockfd, g_username);
+                    close(sockfd);
+                }
+            }
+            else if (strcmp(cmd, "exit") == 0) {
+                break;
             }
         }
-        // 清理输入缓冲
-        int c; while ((c = getchar()) != '\n' && c != EOF);
+
+
+        free(line);
+        free(line_copy);
     }
     printf("Bye!\n");
     return 0;

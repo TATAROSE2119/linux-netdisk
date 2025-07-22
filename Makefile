@@ -18,7 +18,7 @@ $(SERVER): $(SERVER_OBJS)
 
 # 客户端编译
 $(CLIENT): $(CLIENT_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lreadline
 
 # 对象文件编译规则
 %.o: %.c

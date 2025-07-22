@@ -291,13 +291,13 @@ int main(){
     sqlite3_exec(db, sql, 0, 0, 0);
 
 
-    int listen_fd, conn_fd;
+    int listen_fd;
     struct sockaddr_in server_addr, cli_addr;// Server and client address structures
 
     socklen_t cli_len = sizeof(cli_addr);// Length of client address structure
 
-    char buffer[1024];
-    ssize_t n;
+    //char buffer[1024];
+    //ssize_t n;
 
     // Create a socket
     listen_fd=socket(AF_INET, SOCK_STREAM, 0);
