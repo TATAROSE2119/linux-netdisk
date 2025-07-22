@@ -6,11 +6,71 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sqlite3.h>// For SQLite database operations
-#include <sys/stat.h> // For mkdir
+#include <sys/stat.h> // For mkdir and stat
 #include <sys/types.h> // For ssize_t
 #include <openssl/sha.h>// For SHA-256 hashing
 #include <pthread.h> // For multithreading
 #include <dirent.h> // For directory operations
+#include <time.h> // For time functions
+#include <errno.h>
+#include <libgen.h> // 为了使用dirname函数
+
+// 确保用户目录存在
+int ensure_user_dir(const char *username) {
+    char user_dir[1024];
+    snprintf(user_dir, sizeof(user_dir), "netdisk_data/%s", username);
+    
+    // 先确保 netdisk_data 目录存在
+    if(access("netdisk_data", F_OK) != 0) {
+        if(mkdir("netdisk_data", 0755) == -1) {
+            printf("Failed to create netdisk_data directory: %s\n", strerror(errno));
+            return -1;
+        }
+    }
+    
+    // 再确保用户目录存在
+    if(access(user_dir, F_OK) != 0) {
+        if(mkdir(user_dir, 0755) == -1) {
+            printf("Failed to create user directory '%s': %s\n", user_dir, strerror(errno));
+            return -1;
+        }
+    }
+    return 0;
+}
+
+// 添加递归创建目录的辅助函数
+int mkdirs(const char *path) {
+    char tmp[1024];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    if(tmp[len - 1] == '/')
+        tmp[len - 1] = 0;
+    
+    for(p = tmp + 1; *p; p++) {
+        if(*p == '/') {
+            *p = 0;
+            if(access(tmp, F_OK) != 0) {
+                if(mkdir(tmp, 0755) == -1) {
+                    printf("Failed to create directory '%s': %s\n", tmp, strerror(errno));
+                    return -1;
+                }
+            }
+            *p = '/';
+        }
+    }
+    if(access(tmp, F_OK) != 0) {
+        if(mkdir(tmp, 0755) == -1) {
+            printf("Failed to create directory '%s': %s\n", tmp, strerror(errno));
+            return -1;
+        }
+    }
+    return 0;
+}
+
+void sha256_string(const char *str, char *out_hex);
 
 #define PORT 9000
 
@@ -118,74 +178,134 @@ void * handle_client(void *arg) {
         //1.读取用户名长度
         int ulen_net;
         read(conn_fd, &ulen_net, sizeof(ulen_net));
-        int ulen = ntohl(ulen_net); // Convert to host byte order
-        char username[ulen + 1]; // +1 for null terminator
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
         read(conn_fd, username, ulen);
-        username[ulen] = '\0'; // Null-terminate the string
+        username[ulen] = '\0';
+
+        // 读取目标目录
+        int dir_len_net;
+        read(conn_fd, &dir_len_net, sizeof(dir_len_net));
+        int dir_len = ntohl(dir_len_net);
+        char target_dir[1024] = "";
+        if (dir_len > 0) {
+            read(conn_fd, target_dir, dir_len);
+            target_dir[dir_len] = '\0';
+        }
 
         //1.读取文件名长度
-        int name_len_net;// Network byte order for file name length
-        read(conn_fd,&name_len_net, sizeof(name_len_net));
-        int name_len=ntohl(name_len_net); // Convert to host byte order
-
-        //2.读取文件名
-        char filename[name_len + 1]; // +1 for null terminator
+        int name_len_net;
+        read(conn_fd, &name_len_net, sizeof(name_len_net));
+        int name_len = ntohl(name_len_net);
+        char filename[name_len + 1];
         read(conn_fd, filename, name_len);
-        filename[name_len] = '\0'; // Null-terminate the string
+        filename[name_len] = '\0';
 
-        //拼接专属用户目录
-        char filepath[256];
-        snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+        // 确保用户目录存在
+        if (ensure_user_dir(username) != 0) {
+            close(conn_fd);
+            pthread_exit(NULL);
+        }
+
+        // 如果指定了目标目录，确保它存在
+        char dir_path[1024];
+        if (strlen(target_dir) > 0) {
+            if (target_dir[0] == '/') {
+                snprintf(dir_path, sizeof(dir_path), "netdisk_data/%s%s", username, target_dir);
+            } else {
+                snprintf(dir_path, sizeof(dir_path), "netdisk_data/%s/%s", username, target_dir);
+            }
+            if (mkdirs(dir_path) != 0) {
+                printf("Failed to create target directory '%s'\n", dir_path);
+                close(conn_fd);
+                pthread_exit(NULL);
+            }
+        }
+
+        //拼接文件路径
+        char filepath[1024];
+        if (strlen(target_dir) > 0) {
+            if (target_dir[0] == '/') {
+                snprintf(filepath, sizeof(filepath), "netdisk_data/%s%s/%s", username, target_dir, filename);
+            } else {
+                snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s/%s", username, target_dir, filename);
+            }
+        } else {
+            snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+        }
+
+        printf("Uploading file to: %s\n", filepath);
 
         //3.用文件名创建文件
-        FILE *fp=fopen(filepath,"wb"); // Open file for writing
+        FILE *fp = fopen(filepath, "wb");
         if(fp == NULL) {
             perror("File creation error❌");
-            close(conn_fd); // Close the connection
-            pthread_exit(NULL); // Continue to accept next connection
+            close(conn_fd);
+            pthread_exit(NULL);
         }
-        while((n=read(conn_fd,buffer,sizeof(buffer)))>0){
-            fwrite(buffer,sizeof(char),n,fp);
+
+        //4.接收文件内容
+        char buffer[4096];
+        ssize_t n;
+        while((n = read(conn_fd, buffer, sizeof(buffer))) > 0) {
+            fwrite(buffer, sizeof(char), n, fp);
         }
-        printf("File upload successfully as %s ✅\n ",filename);
+        printf("File upload successfully as %s ✅\n", filepath);
         fclose(fp);
     }
     else if(cmd=='D'){// 下载文件
         //1.读取用户名长度
         int ulen_net;
         read(conn_fd, &ulen_net, sizeof(ulen_net));
-        int ulen = ntohl(ulen_net); // Convert to host byte order   
-        char username[ulen + 1]; // +1 for null terminator
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
         read(conn_fd, username, ulen);
-        username[ulen] = '\0'; // Null-terminate the string
+        username[ulen] = '\0';
 
         //1.读取文件名长度
         int name_len_net;
         read(conn_fd, &name_len_net, sizeof(name_len_net));
-        int name_len = ntohl(name_len_net); // Convert to host byte order
+        int name_len = ntohl(name_len_net);
 
         //2.读取文件名
-        char filename[name_len + 1]; // +1 for null terminator
+        char filename[name_len + 1];
         read(conn_fd, filename, name_len);
-        filename[name_len] = '\0'; // Null-terminate the string
+        filename[name_len] = '\0';
 
         //拼接专属用户目录
         char filepath[256];
         snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
 
         //3.打开文件
-        FILE *fp = fopen(filepath, "rb"); // Open file for reading
-        char flag=1; // Flag to check if file exists
+        FILE *fp = fopen(filepath, "rb");
+        char flag = 1;
         if(fp == NULL) {
-            flag = 0; // File not found
-            write(conn_fd, &flag, sizeof(flag)); // Send file exists flag
+            flag = 0;
+            write(conn_fd, &flag, sizeof(flag));
             perror("File not found❌");
-            close(conn_fd); // Close the connection
-            pthread_exit(NULL); // Continue to accept next connection
+            close(conn_fd);
+            pthread_exit(NULL);
         }
-        write(conn_fd, &flag, sizeof(flag)); // Send file exists flag
+        write(conn_fd, &flag, sizeof(flag));
+
+        // 获取并发送文件大小（64位）
+        fseek(fp, 0, SEEK_END);
+        int64_t file_size = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+        
+        // 分别发送高32位和低32位
+        uint32_t size_high = (file_size >> 32) & 0xFFFFFFFF;
+        uint32_t size_low = file_size & 0xFFFFFFFF;
+        size_high = htonl(size_high);
+        size_low = htonl(size_low);
+        write(conn_fd, &size_high, sizeof(size_high));
+        write(conn_fd, &size_low, sizeof(size_low));
+
+        // 发送文件内容
+        char buffer[4096];
+        size_t n;
         while((n = fread(buffer, sizeof(char), sizeof(buffer), fp)) > 0) {
-            write(conn_fd, buffer, n); // Send file data to client
+            write(conn_fd, buffer, n);
         }
         printf("File download successfully as %s ✅\n", filename);
         fclose(fp);
@@ -224,10 +344,25 @@ void * handle_client(void *arg) {
 
         while ((entry = readdir(dir)) != NULL) {
             if (entry->d_type == DT_REG) {
-                int name_len = strlen(entry->d_name);
-                int name_len_net = htonl(name_len);
-                write(conn_fd, &name_len_net, sizeof(name_len_net));
-                write(conn_fd, entry->d_name, name_len);
+                // 获取文件信息
+                char filepath[512];
+                snprintf(filepath, sizeof(filepath), "%s/%s", userdir, entry->d_name);
+                struct stat file_stat;
+                if (stat(filepath, &file_stat) == 0) {
+                    // 发送文件名长度和文件名
+                    int name_len = strlen(entry->d_name);
+                    int name_len_net = htonl(name_len);
+                    write(conn_fd, &name_len_net, sizeof(name_len_net));
+                    write(conn_fd, entry->d_name, name_len);
+
+                    // 发送文件大小
+                    int64_t size_net = htobe64(file_stat.st_size);
+                    write(conn_fd, &size_net, sizeof(size_net));
+
+                    // 发送文件修改时间
+                    int64_t mtime_net = htobe64(file_stat.st_mtime);
+                    write(conn_fd, &mtime_net, sizeof(mtime_net));
+                }
             }
         }
         closedir(dir);
@@ -259,6 +394,249 @@ void * handle_client(void *arg) {
         write(conn_fd, &res, sizeof(res));
         close(conn_fd);
         pthread_exit(NULL);
+    } else if(cmd == 'M') { // mkdir command
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 读取目录路径
+        int path_len_net;
+        read(conn_fd, &path_len_net, sizeof(path_len_net));
+        int path_len = ntohl(path_len_net);
+        char dirpath[path_len + 1];
+        read(conn_fd, dirpath, path_len);
+        dirpath[path_len] = '\0';
+
+        // 确保用户目录存在
+        if (ensure_user_dir(username) != 0) {
+            char res = 0;
+            write(conn_fd, &res, sizeof(res));
+            close(conn_fd);
+            pthread_exit(NULL);
+        }
+
+        // 构建完整路径（去掉开头的斜杠，如果有的话）
+        char full_path[1024];
+        if (dirpath[0] == '/') {
+            snprintf(full_path, sizeof(full_path), "netdisk_data/%s%s", username, dirpath);
+        } else {
+            snprintf(full_path, sizeof(full_path), "netdisk_data/%s/%s", username, dirpath);
+        }
+        
+        printf("Attempting to create directory: %s\n", full_path);
+
+        // 递归创建目录
+        char res = (mkdirs(full_path) == 0) ? 1 : 0;
+        if (!res) {
+            printf("Failed to create directory '%s': %s\n", full_path, strerror(errno));
+        } else {
+            printf("Successfully created directory '%s'\n", full_path);
+        }
+        write(conn_fd, &res, sizeof(res));
+        
+    } else if(cmd == 'T') { // touch command
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 读取文件路径
+        int path_len_net;
+        read(conn_fd, &path_len_net, sizeof(path_len_net));
+        int path_len = ntohl(path_len_net);
+        char filepath[path_len + 1];
+        read(conn_fd, filepath, path_len);
+        filepath[path_len] = '\0';
+
+        // 构建完整路径
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "netdisk_data/%s/%s", username, filepath);
+
+        // 创建空文件
+        FILE *fp = fopen(full_path, "a");
+        char res = (fp != NULL) ? 1 : 0;
+        if(fp) fclose(fp);
+        write(conn_fd, &res, sizeof(res));
+
+    } else if(cmd == 'E') { // tree command
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 构建用户根目录路径
+        char root_path[1024];
+        snprintf(root_path, sizeof(root_path), "netdisk_data/%s", username);
+
+        // 首先发送成功标志
+        char res = 1;
+        write(conn_fd, &res, sizeof(res));
+
+        // 遍历目录树并发送信息
+        DIR *dir = opendir(root_path);
+        if(dir) {
+            struct dirent *entry;
+            while((entry = readdir(dir)) != NULL) {
+                if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                    continue;
+
+                // 获取文件/目录信息
+                char full_path[2048];
+                snprintf(full_path, sizeof(full_path), "%s/%s", root_path, entry->d_name);
+                struct stat st;
+                if(stat(full_path, &st) == 0) {
+                    // 发送项目类型（文件=1，目录=2）
+                    char type = S_ISDIR(st.st_mode) ? 2 : 1;
+                    write(conn_fd, &type, sizeof(type));
+
+                    // 发送名称长度和名称
+                    int name_len = strlen(entry->d_name);
+                    int name_len_net = htonl(name_len);
+                    write(conn_fd, &name_len_net, sizeof(name_len_net));
+                    write(conn_fd, entry->d_name, name_len);
+
+                    // 发送深度（这里都是第一层，为1）
+                    int depth = 1;
+                    int depth_net = htonl(depth);
+                    write(conn_fd, &depth_net, sizeof(depth_net));
+                }
+            }
+            closedir(dir);
+        }
+        // 发送结束标记
+        char end = 0;
+        write(conn_fd, &end, sizeof(end));
+
+    } else if(cmd == 'L') { // 获取目录列表
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 读取目标目录
+        int dir_len_net;
+        read(conn_fd, &dir_len_net, sizeof(dir_len_net));
+        int dir_len = ntohl(dir_len_net);
+        char target_dir[1024] = "";
+        if (dir_len > 0) {
+            read(conn_fd, target_dir, dir_len);
+            target_dir[dir_len] = '\0';
+        }
+
+        // 构建完整路径
+        char full_path[1024];
+        if (strcmp(target_dir, "/") == 0) {
+            snprintf(full_path, sizeof(full_path), "netdisk_data/%s", username);
+        } else {
+            if (target_dir[0] == '/') {
+                snprintf(full_path, sizeof(full_path), "netdisk_data/%s%s", username, target_dir);
+            } else {
+                snprintf(full_path, sizeof(full_path), "netdisk_data/%s/%s", username, target_dir);
+            }
+        }
+
+        // 列出目录内容
+        DIR *dir = opendir(full_path);
+        if (dir == NULL) {
+            char res = 0;
+            write(conn_fd, &res, sizeof(res));
+            close(conn_fd);
+            pthread_exit(NULL);
+        }
+        char res = 1;
+        write(conn_fd, &res, sizeof(res));
+
+        // 计算条目数量
+        struct dirent *entry;
+        int count = 0;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+                count++;
+            }
+        }
+        rewinddir(dir);
+
+        // 发送条目数量
+        int count_net = htonl(count);
+        write(conn_fd, &count_net, sizeof(count_net));
+
+        // 发送每个条目的信息
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+
+            // 获取文件信息
+            char item_path[2048];
+            snprintf(item_path, sizeof(item_path), "%s/%s", full_path, entry->d_name);
+            struct stat st;
+            if (stat(item_path, &st) == 0) {
+                // 发送类型（1=文件，2=目录）
+                char type = S_ISDIR(st.st_mode) ? 2 : 1;
+                write(conn_fd, &type, sizeof(type));
+
+                // 发送名称
+                int name_len = strlen(entry->d_name);
+                int name_len_net = htonl(name_len);
+                write(conn_fd, &name_len_net, sizeof(name_len_net));
+                write(conn_fd, entry->d_name, name_len);
+
+                // 发送大小
+                int64_t size_net = htobe64(st.st_size);
+                write(conn_fd, &size_net, sizeof(size_net));
+
+                // 发送修改时间
+                int64_t mtime_net = htobe64(st.st_mtime);
+                write(conn_fd, &mtime_net, sizeof(mtime_net));
+            }
+        }
+        closedir(dir);
+    } else if(cmd == 'V') { // 验证目录是否存在
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 读取目标目录
+        int path_len_net;
+        read(conn_fd, &path_len_net, sizeof(path_len_net));
+        int path_len = ntohl(path_len_net);
+        char path[1024];
+        read(conn_fd, path, path_len);
+        path[path_len] = '\0';
+
+        // 构建完整路径
+        char full_path[1024];
+        if (strcmp(path, "/") == 0) {
+            snprintf(full_path, sizeof(full_path), "netdisk_data/%s", username);
+        } else {
+            if (path[0] == '/') {
+                snprintf(full_path, sizeof(full_path), "netdisk_data/%s%s", username, path);
+            } else {
+                snprintf(full_path, sizeof(full_path), "netdisk_data/%s/%s", username, path);
+            }
+        }
+
+        // 检查目录是否存在
+        struct stat st;
+        char res = (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
+        write(conn_fd, &res, sizeof(res));
     }
 
     // 关闭连接

@@ -1,0 +1,28 @@
+[
+    {
+        "arguments": [
+            "gcc",
+            "-c",
+            "-Wall",
+            "-O2",
+            "-o",
+            "server/main.o",
+            "server/main.c"
+        ],
+        "directory": "/home/tatarose/linux-netdisk",
+        "file": "server/main.c"
+    },
+    {
+        "arguments": [
+            "gcc",
+            "-c",
+            "-Wall",
+            "-O2",
+            "-o",
+            "client/main.o",
+            "client/main.c"
+        ],
+        "directory": "/home/tatarose/linux-netdisk",
+        "file": "client/main.c"
+    }
+]
