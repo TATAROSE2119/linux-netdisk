@@ -14,6 +14,12 @@
 #include <time.h> // For time functions
 #include <errno.h>
 #include <libgen.h> // 为了使用dirname函数
+#ifdef __APPLE__
+#include <libkern/OSByteOrder.h>
+#define htobe64(x) OSSwapHostToBigInt64(x)
+#else
+#include <endian.h>
+#endif
 
 // 确保用户目录存在
 int ensure_user_dir(const char *username) {
@@ -78,8 +84,8 @@ void * handle_client(void *arg) {
     int conn_fd = *(int *)arg;
     free(arg); // Free the allocated memory for connection file descriptor
     //1.线程内自己打开数据库
-    char buffer[1024];
-    ssize_t n;
+    //char buffer[1024];
+    //ssize_t n;
     sqlite3 *db;
     
     if(sqlite3_open("netdisk.db", &db) != SQLITE_OK) {

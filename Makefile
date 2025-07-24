@@ -1,7 +1,8 @@
 # 编译器和编译选项
 CC = gcc
-CFLAGS = -Wall -O2
-LDFLAGS = -lsqlite3 -lssl -lcrypto -lpthread -lwebsockets
+CFLAGS = -Wall -O2 -I/opt/homebrew/include
+SERVER_LDFLAGS = -L/opt/homebrew/lib -lsqlite3 -lssl -lcrypto -lpthread
+CLIENT_LDFLAGS = -L/opt/homebrew/lib -lreadline
 
 # 目标文件
 SERVER = server/server
@@ -14,11 +15,11 @@ all: $(SERVER) $(CLIENT)
 
 # 服务器编译
 $(SERVER): $(SERVER_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $^ $(SERVER_LDFLAGS)
 
 # 客户端编译
 $(CLIENT): $(CLIENT_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lreadline
+	$(CC) $(CFLAGS) -o $@ $^ $(CLIENT_LDFLAGS)
 
 # 对象文件编译规则
 %.o: %.c

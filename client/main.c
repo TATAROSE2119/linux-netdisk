@@ -10,8 +10,30 @@
 #include <ctype.h> // For isspace()
 #include <sys/time.h>  // 为了使用 gettimeofday 计算速度
 #include <time.h> // For localtime, strftime
-#include <endian.h> // For be64toh
 #include <libgen.h> // 为了使用basename函数
+
+// 跨平台的字节序转换函数
+#ifdef __APPLE__
+#include <libkern/OSByteOrder.h>
+#define be64toh(x) OSSwapBigToHostInt64(x)
+#elif defined(__linux__)
+#include <endian.h>
+#elif defined(_WIN32)
+#include <winsock2.h>
+#define be64toh(x) _byteswap_uint64(x)
+#else
+// 通用实现
+static inline uint64_t be64toh(uint64_t big_endian_64bits) {
+    union {
+        uint64_t ll;
+        uint32_t l[2];
+    } w, r;
+    w.ll = big_endian_64bits;
+    r.l[0] = ntohl(w.l[1]);
+    r.l[1] = ntohl(w.l[0]);
+    return r.ll;
+}
+#endif
 
 int connect_to_server(void);
 
