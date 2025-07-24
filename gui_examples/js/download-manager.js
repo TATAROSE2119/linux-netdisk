@@ -65,7 +65,7 @@ class DownloadManager {
         const filePath = currentPath === '/' ? '/' + filename : currentPath + '/' + filename;
         
         try {
-            const response = await fetch('http://localhost:5000/api/download', {
+            const response = await fetch(window.apiConfig.downloadUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -145,7 +145,7 @@ class DownloadManager {
         console.log('[DEBUG] 批量下载路径列表:', filePaths);
         
         try {
-            const response = await fetch('http://localhost:5000/api/batch-download', {
+            const response = await fetch(window.apiConfig.batchDownloadUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

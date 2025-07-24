@@ -42,7 +42,7 @@ class AuthManager {
         }
 
         try {
-            const response = await fetch('http://localhost:5000/api/login', {
+            const response = await fetch(window.apiConfig.loginUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -82,7 +82,7 @@ class AuthManager {
         }
 
         try {
-            const response = await fetch('http://localhost:5000/api/register', {
+            const response = await fetch(window.apiConfig.registerUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

@@ -98,7 +98,7 @@ class UploadManager {
         }, 30000); // 30秒超时
 
         try {
-            const response = await fetch('http://localhost:5000/api/upload', {
+            const response = await fetch(window.apiConfig.uploadUrl, {
                 method: 'POST',
                 body: formData
             });
@@ -443,7 +443,7 @@ class UploadManager {
         }, 30000); // 30秒超时
 
         try {
-            const response = await fetch('http://localhost:5000/api/upload', {
+            const response = await fetch(window.apiConfig.uploadUrl, {
                 method: 'POST',
                 body: formData
             });

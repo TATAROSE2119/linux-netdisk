@@ -47,7 +47,7 @@ class FileManager {
         UI.setStatus('正在加载文件列表...');
         
         try {
-            const response = await fetch(`http://localhost:5000/api/files?username=${this.currentUser}&path=${encodeURIComponent(this.currentPath)}`);
+            const response = await fetch(`${window.apiConfig.filesUrl}?username=${this.currentUser}&path=${encodeURIComponent(this.currentPath)}`);
             const data = await response.json();
             
             if (data.success) {
@@ -278,7 +278,7 @@ class FileManager {
         const filePath = this.currentPath === '/' ? '/' + this.selectedFile : this.currentPath + '/' + this.selectedFile;
         
         try {
-            const response = await fetch('http://localhost:5000/api/delete', {
+            const response = await fetch(window.apiConfig.deleteUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -340,7 +340,7 @@ class FileManager {
         console.log('[DEBUG] 创建文件夹 - 用户:', currentUser, '路径:', folderPath);
 
         try {
-            const response = await fetch('http://localhost:5000/api/mkdir', {
+            const response = await fetch(window.apiConfig.mkdirUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -389,7 +389,7 @@ class FileManager {
         const newPath = this.currentPath === '/' ? '/' + trimmedName : this.currentPath + '/' + trimmedName;
         
         try {
-            const response = await fetch('http://localhost:5000/api/rename', {
+            const response = await fetch(window.apiConfig.renameUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

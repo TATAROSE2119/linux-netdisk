@@ -7,10 +7,22 @@
 C_SERVER_HOST = '127.0.0.1'
 C_SERVER_PORT = 9000
 
-# Web服务器配置
-WEB_SERVER_HOST = '0.0.0.0'
-WEB_SERVER_PORT = 5000
-WEB_SERVER_DEBUG = True
+# DuckDNS域名配置
+DOMAIN_NAME = 'tatapan.duckdns.org'
+WEB_SERVER_HOST = '0.0.0.0'  # 允许外网访问
+WEB_SERVER_PORT = 8080  # 使用非特权端口
+WEB_SERVER_DEBUG = True  # 调试模式
+# 配置允许的主机
+ALLOWED_HOSTS = [
+    'tatapan.duckdns.org',
+    'localhost',
+    '127.0.0.1'
+]
+
+# DuckDNS自动更新配置
+DUCKDNS_DOMAIN = 'tatapan'
+DUCKDNS_TOKEN = 'd31c8e89-fa0b-4339-8cc4-738993cf2159'
+AUTO_UPDATE_IP = True  # 自动更新IP
 
 # 文件上传配置
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB

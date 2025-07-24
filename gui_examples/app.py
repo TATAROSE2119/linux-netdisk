@@ -7,11 +7,11 @@ from flask import Flask, send_from_directory
 from flask_cors import CORS
 import os
 import sys
+from api.config import DOMAIN_NAME, WEB_SERVER_HOST, WEB_SERVER_PORT, WEB_SERVER_DEBUG
 
 # 添加当前目录到Python路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from api.config import WEB_SERVER_HOST, WEB_SERVER_PORT, WEB_SERVER_DEBUG
 from api.auth_routes import auth_bp
 from api.file_routes import file_bp
 from api.c_server_client import c_client
@@ -84,23 +84,35 @@ def health_check():
 
 def print_startup_info():
     """打印启动信息"""
-    print("=" * 50)
-    print("🌐 Web桥接服务器启动中...")
-    print(f"📡 连接到C服务器: {c_client.host}:{c_client.port}")
-    print(f"🌍 Web界面地址: http://localhost:{WEB_SERVER_PORT}")
-    print("=" * 50)
+    print("=" * 60)
+    print("🌐 网盘Web服务器启动中...")
+    print(f"📡 C服务器地址: {c_client.host}:{c_client.port}")
+    print(f"🌍 访问地址: http://{DOMAIN_NAME}")
+    print(f"🔗 本地访问: http://localhost:{WEB_SERVER_PORT}")
+    print("=" * 60)
 
 
 if __name__ == '__main__':
+    # 支持环境变量覆盖端口
+    port = int(os.environ.get('WEB_SERVER_PORT', WEB_SERVER_PORT))
+
     print_startup_info()
-    
+
     # 测试C服务器连接
     if not c_client.test_connection():
         print("⚠️  警告: 无法连接到C服务器，请确保C服务器正在运行")
-    
+
     # 启动Web服务器
-    app.run(
-        host=WEB_SERVER_HOST,
-        port=WEB_SERVER_PORT,
-        debug=WEB_SERVER_DEBUG
-    )
+    try:
+        app.run(
+            host=WEB_SERVER_HOST,
+            port=port,
+            debug=WEB_SERVER_DEBUG
+        )
+    except PermissionError:
+        print(f"❌ 端口{port}需要管理员权限，尝试使用端口8080...")
+        app.run(
+            host=WEB_SERVER_HOST,
+            port=8080,
+            debug=WEB_SERVER_DEBUG
+        )
