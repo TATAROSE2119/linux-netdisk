@@ -2,29 +2,29 @@
     {
         "arguments": [
             "gcc",
+            "-c",
             "-Wall",
             "-O2",
             "-I/opt/homebrew/include",
-            "-c",
-            "-o",
-            "server/main.o",
-            "server/main.c"
-        ],
-        "directory": "/Users/tatarose/linux-netdisk",
-        "file": "server/main.c"
-    },
-    {
-        "arguments": [
-            "gcc",
-            "-Wall",
-            "-O2",
-            "-I/opt/homebrew/include",
-            "-c",
             "-o",
             "client/main.o",
             "client/main.c"
         ],
-        "directory": "/Users/tatarose/linux-netdisk",
+        "directory": "/home/tatarose/linux-netdisk",
         "file": "client/main.c"
+    },
+    {
+        "arguments": [
+            "gcc",
+            "-c",
+            "-Wall",
+            "-O2",
+            "-I/opt/homebrew/include",
+            "-o",
+            "server/main.o",
+            "server/main.c"
+        ],
+        "directory": "/home/tatarose/linux-netdisk",
+        "file": "server/main.c"
     }
 ]

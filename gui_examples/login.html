@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网盘系统 - 登录</title>
+
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">☁️</div>
+        <h1 class="title">网盘系统</h1>
+        <p class="subtitle">安全、便捷的文件存储与管理</p>
+        
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" placeholder="请输入用户名" required>
+            </div>
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" placeholder="请输入密码" required>
+            </div>
+            
+            <button type="submit" class="btn btn-primary" id="loginBtn">
+                登录
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="showRegister()">
+                注册新账户
+            </button>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>正在登录...</p>
+        </div>
+
+        <div class="status-message" id="statusMessage"></div>
+
+        <div class="footer">
+            <p>© 2025 网盘系统. 保护您的数据安全.</p>
+        </div>
+    </div>
+
+    <link rel="stylesheet" href="css/login.css">
+
+    <script src="js/ui-utils.js"></script>
+    <script src="js/auth-manager.js"></script>
+    <script src="js/login.js"></script>
+
+
+</body>
+</html>

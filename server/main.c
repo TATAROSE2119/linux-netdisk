@@ -250,14 +250,40 @@ void * handle_client(void *arg) {
             pthread_exit(NULL);
         }
 
-        //4.接收文件内容
+        //4.读取文件大小
+        uint32_t size_high_net, size_low_net;
+        read(conn_fd, &size_high_net, sizeof(size_high_net));
+        read(conn_fd, &size_low_net, sizeof(size_low_net));
+
+        uint32_t size_high = ntohl(size_high_net);
+        uint32_t size_low = ntohl(size_low_net);
+        uint64_t file_size = ((uint64_t)size_high << 32) | size_low;
+
+        printf("Expected file size: %lu bytes\n", file_size);
+
+        //5.接收文件内容
         char buffer[4096];
         ssize_t n;
-        while((n = read(conn_fd, buffer, sizeof(buffer))) > 0) {
+        uint64_t total_received = 0;
+
+        while(total_received < file_size && (n = read(conn_fd, buffer,
+              sizeof(buffer) < (file_size - total_received) ? sizeof(buffer) : (file_size - total_received))) > 0) {
             fwrite(buffer, sizeof(char), n, fp);
+            total_received += n;
         }
-        printf("File upload successfully as %s ✅\n", filepath);
+
         fclose(fp);
+
+        // 发送响应给客户端
+        char response = (total_received == file_size) ? 1 : 0;
+        write(conn_fd, &response, sizeof(response));
+
+        if (response == 1) {
+            printf("File upload successfully as %s ✅ (%lu bytes)\n", filepath, total_received);
+        } else {
+            printf("File upload failed for %s ❌ (expected %lu, received %lu bytes)\n",
+                   filepath, file_size, total_received);
+        }
     }
     else if(cmd=='D'){// 下载文件
         //1.读取用户名长度
@@ -523,7 +549,7 @@ void * handle_client(void *arg) {
         char end = 0;
         write(conn_fd, &end, sizeof(end));
 
-    } else if(cmd == 'L') { // 获取目录列表
+    } else if(cmd == 'S') { // 获取目录列表 (List directory)
         // 读取用户名
         int ulen_net;
         read(conn_fd, &ulen_net, sizeof(ulen_net));
@@ -544,7 +570,7 @@ void * handle_client(void *arg) {
 
         // 构建完整路径
         char full_path[1024];
-        if (strcmp(target_dir, "/") == 0) {
+        if (strcmp(target_dir, "/") == 0 || strlen(target_dir) == 0) {
             snprintf(full_path, sizeof(full_path), "netdisk_data/%s", username);
         } else {
             if (target_dir[0] == '/') {
@@ -554,9 +580,12 @@ void * handle_client(void *arg) {
             }
         }
 
+        printf("[DEBUG] L命令 - 用户: %s, 目标目录: '%s', 完整路径: %s\n", username, target_dir, full_path);
+
         // 列出目录内容
         DIR *dir = opendir(full_path);
         if (dir == NULL) {
+            printf("[ERROR] 无法打开目录: %s (错误: %s)\n", full_path, strerror(errno));
             char res = 0;
             write(conn_fd, &res, sizeof(res));
             close(conn_fd);
@@ -590,9 +619,10 @@ void * handle_client(void *arg) {
             snprintf(item_path, sizeof(item_path), "%s/%s", full_path, entry->d_name);
             struct stat st;
             if (stat(item_path, &st) == 0) {
-                // 发送类型（1=文件，2=目录）
-                char type = S_ISDIR(st.st_mode) ? 2 : 1;
-                write(conn_fd, &type, sizeof(type));
+                // 发送类型（1=文件，2=目录）- 使用4字节整数
+                uint32_t type = S_ISDIR(st.st_mode) ? 2 : 1;
+                uint32_t type_net = htonl(type);
+                write(conn_fd, &type_net, sizeof(type_net));
 
                 // 发送名称
                 int name_len = strlen(entry->d_name);
@@ -607,9 +637,66 @@ void * handle_client(void *arg) {
                 // 发送修改时间
                 int64_t mtime_net = htobe64(st.st_mtime);
                 write(conn_fd, &mtime_net, sizeof(mtime_net));
+
+                printf("[DEBUG] 发送条目: %s, 类型: %u, 大小: %ld\n",
+                       entry->d_name, type, st.st_size);
             }
         }
         closedir(dir);
+    } else if(cmd == 'N') { // 重命名文件或目录 (reName)
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 读取旧路径
+        int old_path_len_net;
+        read(conn_fd, &old_path_len_net, sizeof(old_path_len_net));
+        int old_path_len = ntohl(old_path_len_net);
+        char old_path[1024];
+        read(conn_fd, old_path, old_path_len);
+        old_path[old_path_len] = '\0';
+
+        // 读取新路径
+        int new_path_len_net;
+        read(conn_fd, &new_path_len_net, sizeof(new_path_len_net));
+        int new_path_len = ntohl(new_path_len_net);
+        char new_path[1024];
+        read(conn_fd, new_path, new_path_len);
+        new_path[new_path_len] = '\0';
+
+        // 构建完整的旧路径和新路径
+        char full_old_path[1024];
+        char full_new_path[1024];
+
+        if (old_path[0] == '/') {
+            snprintf(full_old_path, sizeof(full_old_path), "netdisk_data/%s%s", username, old_path);
+        } else {
+            snprintf(full_old_path, sizeof(full_old_path), "netdisk_data/%s/%s", username, old_path);
+        }
+
+        if (new_path[0] == '/') {
+            snprintf(full_new_path, sizeof(full_new_path), "netdisk_data/%s%s", username, new_path);
+        } else {
+            snprintf(full_new_path, sizeof(full_new_path), "netdisk_data/%s/%s", username, new_path);
+        }
+
+        printf("[DEBUG] 重命名: %s -> %s\n", full_old_path, full_new_path);
+
+        // 执行重命名
+        char res = (rename(full_old_path, full_new_path) == 0) ? 1 : 0;
+        if (res == 0) {
+            printf("[ERROR] 重命名失败: %s\n", strerror(errno));
+        } else {
+            printf("重命名成功: %s -> %s\n", old_path, new_path);
+        }
+
+        write(conn_fd, &res, sizeof(res));
+        close(conn_fd);
+        pthread_exit(NULL);
     } else if(cmd == 'V') { // 验证目录是否存在
         // 读取用户名
         int ulen_net;

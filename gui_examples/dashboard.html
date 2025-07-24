@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网盘系统 - 文件管理</title>
+    <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <nav class="navbar">
+        <div class="navbar-left">
+            <div class="logo">☁️</div>
+            <div class="navbar-title">网盘系统</div>
+        </div>
+        <div class="navbar-right">
+            <div class="user-info">
+                <div class="user-avatar" id="userAvatar">👤</div>
+                <div class="user-name" id="userName">用户</div>
+            </div>
+            <button class="logout-btn" onclick="logout()">
+                🚪 退出登录
+            </button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- 工具栏 -->
+        <div class="toolbar">
+            <button class="btn btn-success" onclick="uploadFile()" disabled id="uploadBtn">
+                📤 上传文件
+            </button>
+            <button class="btn btn-success" onclick="batchUpload()" disabled id="batchUploadBtn">
+                📤 批量上传
+            </button>
+            <button class="btn btn-primary" onclick="downloadFile()" disabled id="downloadBtn">
+                📥 下载文件
+            </button>
+            <button class="btn btn-success" onclick="downloadSelected()" disabled id="batchDownloadBtn">
+                📦 批量下载
+            </button>
+            <button class="btn btn-warning" onclick="renameItem()" disabled id="renameBtn">
+                ✏️ 重命名
+            </button>
+            <button class="btn btn-danger" onclick="deleteItem()" disabled id="deleteBtn">
+                🗑️ 删除
+            </button>
+            <button class="btn btn-info" onclick="createFolder()" disabled id="createFolderBtn">
+                📁 新建文件夹
+            </button>
+            <button class="btn btn-info" onclick="refreshList()" disabled id="refreshBtn">
+                🔄 刷新列表
+            </button>
+            <button class="btn btn-info" onclick="selectAll()" disabled id="selectAllBtn">
+                ☑️ 全选
+            </button>
+            <button class="btn btn-info" onclick="clearSelection()" disabled id="clearSelectionBtn">
+                ❌ 取消选择
+            </button>
+        </div>
+
+        <!-- 导航区域 -->
+        <div class="navigation">
+            <button class="btn btn-info" onclick="goBack()" disabled id="backBtn">
+                ⬅️ 返回上级
+            </button>
+            <span style="font-weight: bold;">📍 当前位置:</span>
+            <span id="currentPathDisplay" style="font-family: monospace; background: #f8f9fa; padding: 5px 10px; border-radius: 3px;">/</span>
+        </div>
+
+        <!-- 上传区域 -->
+        <div class="upload-area" id="uploadArea">
+            <h3>📁 拖拽文件到此处上传</h3>
+            <p>或点击上传按钮选择文件</p>
+            <p style="color: #6c757d; font-size: 14px;">将上传到: <span id="uploadPathDisplay">/</span></p>
+        </div>
+        
+        <!-- 文件列表 -->
+        <div class="file-list-container">
+            <table class="file-list" id="fileList">
+                <thead>
+                    <tr>
+                        <th>☑️ 选择</th>
+                        <th>📄 名称</th>
+                        <th>📂 类型</th>
+                        <th>📊 大小</th>
+                        <th>📅 修改时间</th>
+                        <th>⚙️ 操作</th>
+                    </tr>
+                </thead>
+                <tbody id="fileTableBody">
+                    <!-- 文件列表将在这里动态生成 -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 状态栏 -->
+        <div class="status-bar">
+            <span id="statusText">就绪</span>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+        
+        <!-- 批量上传队列显示 -->
+        <div id="uploadQueueContainer" style="display: none; margin: 20px 0; padding: 15px; background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);">
+            <h4 style="margin-top: 0;">📤 上传队列</h4>
+            <div id="uploadQueue"></div>
+            <div style="margin-top: 10px;">
+                <button class="btn btn-danger" onclick="clearUploadQueue()" id="clearQueueBtn">🗑️ 清空队列</button>
+                <button class="btn btn-warning" onclick="pauseUpload()" id="pauseBtn" style="display: none;">⏸️ 暂停</button>
+                <button class="btn btn-success" onclick="resumeUpload()" id="resumeBtn" style="display: none;">▶️ 继续</button>
+                <span id="queueStatus" style="margin-left: 15px; font-weight: bold;"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 引入JavaScript模块 -->
+    <script src="js/ui-utils.js"></script>
+    <script src="js/auth-manager.js"></script>
+    <script src="js/file-manager.js"></script>
+    <script src="js/upload-manager.js"></script>
+    <script src="js/download-manager.js"></script>
+    
+    <script>
+        // 全局函数绑定（用于HTML onclick事件）
+        function uploadFile() { uploadManager.uploadFile(); }
+        function batchUpload() { uploadManager.batchUpload(); }
+        function downloadFile() { downloadManager.downloadFile(); }
+        function downloadSelected() { downloadManager.downloadSelected(); }
+        function renameItem() { fileManager.renameItem(); }
+        function deleteItem() { fileManager.deleteItem(); }
+        function createFolder() { fileManager.createFolder(); }
+        function refreshList() { fileManager.refreshList(); }
+        function selectAll() { fileManager.selectAll(); }
+        function clearSelection() { fileManager.clearSelection(); }
+        function goBack() { fileManager.goBack(); }
+        function logout() { authManager.logout(); }
+        
+        // 批量上传队列管理
+        function clearUploadQueue() { uploadManager.clearUploadQueue(); }
+        function pauseUpload() { uploadManager.pauseUpload(); }
+        function resumeUpload() { uploadManager.resumeUpload(); }
+    </script>
+</body>
+</html>
