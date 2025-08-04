@@ -38,7 +38,7 @@ static inline uint64_t be64toh(uint64_t big_endian_64bits) {
 int connect_to_server(void);
 
 #define PORT 9000
-#define server_IP "192.168.50.153"
+#define server_IP "127.0.0.1"  // 本地部署，使用localhost
 
 char g_username[64]={0}; // Global variable to store username
 
