@@ -11,6 +11,7 @@
 #include <sys/time.h>  // 为了使用 gettimeofday 计算速度
 #include <time.h> // For localtime, strftime
 #include <libgen.h> // 为了使用basename函数
+#include <stdint.h> // For uint32_t, int64_t
 
 // 跨平台的字节序转换函数
 #ifdef __APPLE__
@@ -63,11 +64,14 @@ void clear_server_entries() {
 
 // 规范化路径（处理 . 和 ..）
 void normalize_path(char *path) {
+    char temp_path[1024];
+    strcpy(temp_path, path);  // 创建副本避免strtok修改原字符串
+
     char *parts[256];  // 存储路径的各个部分
     int count = 0;
-    
+
     // 分割路径
-    char *token = strtok(path, "/");
+    char *token = strtok(temp_path, "/");
     while (token != NULL && count < 256) {
         if (strcmp(token, ".") == 0) {
             // 忽略 "."
@@ -75,21 +79,31 @@ void normalize_path(char *path) {
             // 返回上一级目录
             if (count > 0) count--;
         } else {
-            parts[count++] = token;
+            // 复制token到新的内存位置
+            parts[count] = malloc(strlen(token) + 1);
+            strcpy(parts[count], token);
+            count++;
         }
         token = strtok(NULL, "/");
     }
-    
+
     // 重建路径
-    path[0] = '/';
-    path[1] = '\0';
+    strcpy(path, "/");
     for (int i = 0; i < count; i++) {
+        if (strlen(path) > 1) {
+            strcat(path, "/");
+        }
         strcat(path, parts[i]);
-        if (i < count - 1) strcat(path, "/");
+        free(parts[i]);  // 释放内存
     }
-    
-    // 如果路径为空，设为根目录
-    if (strlen(path) == 0) strcpy(path, "/");
+
+    // 确保路径以"/"开头
+    if (path[0] != '/') {
+        char temp[1024];
+        strcpy(temp, path);
+        strcpy(path, "/");
+        strcat(path, temp);
+    }
 }
 
 // 获取服务器文件列表
@@ -102,7 +116,7 @@ void fetch_server_entries(const char *current_dir) {
     if (sockfd < 0) return;
 
     // 发送列表命令
-    char cmd = 'L';  // 新命令：获取目录内容
+    char cmd = 'S';  // 使用正确的命令：获取目录内容
     write(sockfd, &cmd, sizeof(cmd));
     
     // 发送用户名
@@ -132,16 +146,18 @@ void fetch_server_entries(const char *current_dir) {
 
     // 读取每个条目
     for(int i = 0; i < count && i < MAX_FILES; i++) {
-        // 读取类型（文件/目录）
-        char type;
-        read(sockfd, &type, sizeof(type));
-        
+        // 读取类型（文件/目录）- 服务器发送4字节
+        uint32_t type_net;
+        if (read(sockfd, &type_net, sizeof(type_net)) <= 0) break;
+        uint32_t type = ntohl(type_net);
+
         // 读取名称
         int name_len_net;
-        read(sockfd, &name_len_net, sizeof(name_len_net));
+        if (read(sockfd, &name_len_net, sizeof(name_len_net)) <= 0) break;
         int name_len = ntohl(name_len_net);
-        
-        read(sockfd, server_entries[i].name, name_len);
+
+        if (name_len <= 0 || name_len >= 256) break;
+        if (read(sockfd, server_entries[i].name, name_len) <= 0) break;
         server_entries[i].name[name_len] = '\0';
         server_entries[i].is_dir = (type == 2);  // 2表示目录
         
@@ -151,7 +167,7 @@ void fetch_server_entries(const char *current_dir) {
     close(sockfd);
 }
 
-// 服务器文件名补全生成器
+// 服务器文件名补全生成器（仅文件）
 char* server_file_generator(const char* text, int state) {
     static int list_index, len;
     char* name;
@@ -163,15 +179,16 @@ char* server_file_generator(const char* text, int state) {
 
     while (list_index < server_entries_count) {
         name = server_entries[list_index++].name;
-        if (strncmp(name, text, len) == 0) {
+        // 只返回文件，不返回目录
+        if (!server_entries[list_index-1].is_dir && strncmp(name, text, len) == 0) {
             return strdup(name);
         }
     }
     return NULL;
 }
 
-// 目录补全生成器
-char* dir_generator(const char* text, int state) {
+// 服务器所有条目补全生成器（文件和目录）
+char* server_all_generator(const char* text, int state) {
     static int list_index, len;
     char* name;
 
@@ -183,14 +200,55 @@ char* dir_generator(const char* text, int state) {
     while (list_index < server_entries_count) {
         name = server_entries[list_index++].name;
         if (strncmp(name, text, len) == 0) {
-            char* completion = malloc(strlen(name) + 2);  // +2 for potential '/' and null terminator
+            char* completion = malloc(strlen(name) + 2);
             strcpy(completion, name);
+            // 如果是目录，添加 / 后缀
             if (server_entries[list_index-1].is_dir) {
                 strcat(completion, "/");
             }
             return completion;
         }
     }
+    return NULL;
+}
+
+// 目录补全生成器（只返回目录）
+char* dir_generator(const char* text, int state) {
+    static int list_index, len, special_state;
+    char* name;
+
+    if (!state) {
+        list_index = 0;
+        special_state = 0;
+        len = strlen(text);
+    }
+
+    // 首先处理特殊目录
+    if (special_state == 0) {
+        special_state = 1;
+        if ((len == 0 || strncmp("..", text, len) == 0) && strcmp(g_current_dir, "/") != 0) {
+            return strdup("../");
+        }
+    }
+    if (special_state == 1) {
+        special_state = 2;
+        if (len == 0 || strncmp(".", text, len) == 0) {
+            return strdup("./");
+        }
+    }
+
+    // 然后处理服务器目录
+    while (list_index < server_entries_count) {
+        name = server_entries[list_index++].name;
+        // 只返回目录
+        if (server_entries[list_index-1].is_dir && strncmp(name, text, len) == 0) {
+            char* completion = malloc(strlen(name) + 2);
+            strcpy(completion, name);
+            strcat(completion, "/");
+            return completion;
+        }
+    }
+
     return NULL;
 }
 
@@ -219,11 +277,30 @@ char* command_generator(const char* text, int state) {
 }
 
 // 补全函数
+// 获取命令行中的参数个数
+int count_args(const char* line) {
+    int count = 0;
+    int in_word = 0;
+
+    while (*line) {
+        if (!isspace(*line)) {
+            if (!in_word) {
+                count++;
+                in_word = 1;
+            }
+        } else {
+            in_word = 0;
+        }
+        line++;
+    }
+    return count;
+}
+
 char** command_completion(const char* text, int start, int end) {
     // 获取当前行的第一个词（命令）
     char* cmd_start = rl_line_buffer;
     while (*cmd_start && isspace(*cmd_start)) cmd_start++;
-    
+
     char cmd[32] = {0};
     int i = 0;
     while (*cmd_start && !isspace(*cmd_start) && i < sizeof(cmd)-1) {
@@ -234,23 +311,75 @@ char** command_completion(const char* text, int start, int end) {
     if (start == 0) {
         return rl_completion_matches(text, command_generator);
     }
-    
-    // 如果命令是 cd、download 或 ls，进行目录/文件补全
-    if (strcmp(cmd, "cd") == 0 || strcmp(cmd, "download") == 0 || 
-        strcmp(cmd, "ls") == 0 || strcmp(cmd, "tree") == 0) {
-        // 当用户输入这些命令后按 Tab，获取最新的服务器文件列表
-        if (server_entries_count == 0) {
-            fetch_server_entries(g_current_dir);
-        }
+
+    // 确保有最新的服务器文件列表
+    if (server_entries_count == 0) {
+        fetch_server_entries(g_current_dir);
+    }
+
+    // 根据不同命令提供不同的补全
+    if (strcmp(cmd, "cd") == 0) {
+        // cd 命令只补全目录
         return rl_completion_matches(text, dir_generator);
     }
-    
-    // 如果命令是 upload，使用本地文件补全
-    if (strcmp(cmd, "upload") == 0) {
-        rl_attempted_completion_over = 0;  // 允许默认文件名补全
+    else if (strcmp(cmd, "download") == 0) {
+        // download 命令只补全文件
+        return rl_completion_matches(text, server_file_generator);
+    }
+    else if (strcmp(cmd, "delete") == 0) {
+        // delete 命令补全文件和目录
+        return rl_completion_matches(text, server_all_generator);
+    }
+    else if (strcmp(cmd, "upload") == 0) {
+        // upload 命令：upload <本地文件1> [本地文件2...] <服务器目录>
+        // 判断是否是最后一个参数（目标目录）
+        char* line_copy = strdup(rl_line_buffer);
+        char* token = strtok(line_copy, " \t");
+        int current_arg = 0;
+        int is_last_arg = 1;
+
+        // 跳过命令名
+        token = strtok(NULL, " \t");
+        while (token != NULL) {
+            current_arg++;
+            char* next_token = strtok(NULL, " \t");
+            if (next_token == NULL && strstr(rl_line_buffer + start, text) != NULL) {
+                // 这是最后一个参数
+                is_last_arg = 1;
+                break;
+            } else if (next_token != NULL) {
+                is_last_arg = 0;
+            }
+            token = next_token;
+        }
+        free(line_copy);
+
+        if (is_last_arg && current_arg > 0) {
+            // 最后一个参数，补全服务器目录
+            return rl_completion_matches(text, dir_generator);
+        } else {
+            // 前面的参数，使用本地文件补全
+            rl_attempted_completion_over = 0;
+            return NULL;
+        }
+    }
+    else if (strcmp(cmd, "list") == 0 || strcmp(cmd, "ls") == 0 ||
+             strcmp(cmd, "tree") == 0 || strcmp(cmd, "pwd") == 0) {
+        // 这些命令不需要参数补全
+        rl_attempted_completion_over = 1;
         return NULL;
     }
-    
+    else if (strcmp(cmd, "mkdir") == 0 || strcmp(cmd, "touch") == 0) {
+        // mkdir 和 touch 不需要补全（创建新的文件/目录）
+        rl_attempted_completion_over = 1;
+        return NULL;
+    }
+    else if (strcmp(cmd, "register") == 0 || strcmp(cmd, "login") == 0) {
+        // 用户名密码不需要补全
+        rl_attempted_completion_over = 1;
+        return NULL;
+    }
+
     // 其他情况不进行补全
     rl_attempted_completion_over = 1;
     return NULL;
@@ -453,12 +582,20 @@ void download_file(const char *filename) {
 
     char cmd = 'D';
     write(sockfd, &cmd, sizeof(cmd));
-    
+
+    // 发送用户名
     int ulen = strlen(g_username);
     int ulen_net = htonl(ulen);
     write(sockfd, &ulen_net, sizeof(ulen_net));
     write(sockfd, g_username, ulen);
 
+    // 发送当前目录路径
+    int dir_len = strlen(g_current_dir);
+    int dir_len_net = htonl(dir_len);
+    write(sockfd, &dir_len_net, sizeof(dir_len_net));
+    write(sockfd, g_current_dir, dir_len);
+
+    // 发送文件名
     int name_len = strlen(filename);
     int name_len_net = htonl(name_len);
     write(sockfd, &name_len_net, sizeof(name_len_net));
@@ -528,7 +665,7 @@ void format_size(int64_t size, char *buf) {
 }
 
 void send_list_files(int sockfd, const char* username) {
-    char cmd = 'L';
+    char cmd = 'S';  // 使用正确的命令字符
     write(sockfd, &cmd, sizeof(cmd));
     
     // 发送用户名
@@ -544,14 +681,24 @@ void send_list_files(int sockfd, const char* username) {
     write(sockfd, g_current_dir, dir_len);
 
     char res;
-    read(sockfd, &res, sizeof(res));
+    if (read(sockfd, &res, sizeof(res)) <= 0) {
+        printf("服务器通信错误\n");
+        close(sockfd);
+        return;
+    }
+
     if(res == 0) {
-        printf("[文件列表] 目录不存在或读取失败\n");
+        printf("目录不存在或读取失败: %s\n", g_current_dir);
+        close(sockfd);
         return;
     }
 
     int file_count_net;
-    read(sockfd, &file_count_net, sizeof(file_count_net));
+    if (read(sockfd, &file_count_net, sizeof(file_count_net)) <= 0) {
+        printf("读取文件数量失败\n");
+        close(sockfd);
+        return;
+    }
     int file_count = ntohl(file_count_net);
     
     printf("\n当前目录 (%s) 共 %d 个项目:\n", g_current_dir, file_count);
@@ -559,26 +706,47 @@ void send_list_files(int sockfd, const char* username) {
     printf("--------------------------------------------------------------------------------\n");
 
     for(int i = 0; i < file_count; i++) {
-        // 读取类型（文件/目录）
-        char type;
-        read(sockfd, &type, sizeof(type));
+        // 读取类型（文件/目录）- 服务器发送的是4字节整数
+        uint32_t type_net;
+        if (read(sockfd, &type_net, sizeof(type_net)) <= 0) {
+            printf("读取文件类型失败\n");
+            break;
+        }
+        uint32_t type = ntohl(type_net);
 
         // 读取名称
         int name_len_net;
-        read(sockfd, &name_len_net, sizeof(name_len_net));
+        if (read(sockfd, &name_len_net, sizeof(name_len_net)) <= 0) {
+            printf("读取文件名长度失败\n");
+            break;
+        }
         int name_len = ntohl(name_len_net);
+        if (name_len <= 0 || name_len >= 256) {
+            printf("文件名长度异常: %d\n", name_len);
+            break;
+        }
+
         char name[256];
-        read(sockfd, name, name_len);
+        if (read(sockfd, name, name_len) <= 0) {
+            printf("读取文件名失败\n");
+            break;
+        }
         name[name_len] = '\0';
 
         // 读取大小
         int64_t size_net;
-        read(sockfd, &size_net, sizeof(size_net));
+        if (read(sockfd, &size_net, sizeof(size_net)) <= 0) {
+            printf("读取文件大小失败\n");
+            break;
+        }
         int64_t size = be64toh(size_net);
 
         // 读取修改时间
         int64_t mtime_net;
-        read(sockfd, &mtime_net, sizeof(mtime_net));
+        if (read(sockfd, &mtime_net, sizeof(mtime_net)) <= 0) {
+            printf("读取修改时间失败\n");
+            break;
+        }
         time_t mtime = be64toh(mtime_net);
 
         // 格式化大小
@@ -596,29 +764,50 @@ void send_list_files(int sockfd, const char* username) {
 
         // 打印项目信息（目录添加/后缀）
         if (type == 2) {
-            printf("%-40s %-15s %-20s\n", strcat(name, "/"), size_str, time_str);
+            char display_name[300];
+            snprintf(display_name, sizeof(display_name), "%s/", name);
+            printf("%-40s %-15s %-20s\n", display_name, size_str, time_str);
         } else {
             printf("%-40s %-15s %-20s\n", name, size_str, time_str);
         }
     }
     printf("--------------------------------------------------------------------------------\n\n");
+    close(sockfd);
 }
 
 void send_delete_file(int sockfd, const char* username, const char* filename) {
     char cmd = 'X';
     write(sockfd, &cmd, sizeof(cmd));
+
+    // 发送用户名
     int ulen = strlen(username);
     int ulen_net = htonl(ulen);
     write(sockfd, &ulen_net, sizeof(ulen_net));
     write(sockfd, username, ulen);
+
+    // 发送当前目录路径
+    int dir_len = strlen(g_current_dir);
+    int dir_len_net = htonl(dir_len);
+    write(sockfd, &dir_len_net, sizeof(dir_len_net));
+    write(sockfd, g_current_dir, dir_len);
+
+    // 发送文件名
     int fname_len = strlen(filename);
     int fname_len_net = htonl(fname_len);
     write(sockfd, &fname_len_net, sizeof(fname_len_net));
     write(sockfd, filename, fname_len);
+
+    // 读取结果
     char res;
-    read(sockfd, &res, sizeof(res));
-    if(res == 1) printf("[删除] 文件 '%s' 删除成功！\n", filename);
-    else printf("[删除] 文件 '%s' 删除失败！\n", filename);
+    if (read(sockfd, &res, sizeof(res)) > 0) {
+        if(res == 1) {
+            printf("✅ 删除成功: %s\n", filename);
+        } else {
+            printf("❌ 删除失败: %s (文件/目录不存在或无权限)\n", filename);
+        }
+    } else {
+        printf("❌ 服务器通信错误\n");
+    }
 }
 
 void send_mkdir(const char* path) {
@@ -720,9 +909,12 @@ void send_tree() {
     }
 
     int sockfd = connect_to_server();
-    if (sockfd < 0) return;
+    if (sockfd < 0) {
+        printf("无法连接到服务器\n");
+        return;
+    }
 
-    char cmd = 'E';
+    char cmd = 'Y';  // 使用命令Y来获取指定目录的树结构
     write(sockfd, &cmd, sizeof(cmd));
 
     // 发送用户名
@@ -731,43 +923,58 @@ void send_tree() {
     write(sockfd, &ulen_net, sizeof(ulen_net));
     write(sockfd, g_username, ulen);
 
+    // 发送当前目录路径
+    int dir_len = strlen(g_current_dir);
+    int dir_len_net = htonl(dir_len);
+    write(sockfd, &dir_len_net, sizeof(dir_len_net));
+    write(sockfd, g_current_dir, dir_len);
+
     char res;
-    read(sockfd, &res, sizeof(res));
-    if (!res) {
-        printf("获取目录树失败 ❌\n");
+    if (read(sockfd, &res, sizeof(res)) <= 0) {
+        printf("服务器通信错误\n");
         close(sockfd);
         return;
     }
 
-    printf("\n%s 的目录树:\n", g_username);
-    printf(".\n");
+    if (!res) {
+        printf("获取目录树失败，目录可能不存在: %s\n", g_current_dir);
+        close(sockfd);
+        return;
+    }
+
+    printf("\n目录树 (%s):\n", g_current_dir);
+    if (strcmp(g_current_dir, "/") == 0) {
+        printf("📁 /\n");
+    } else {
+        printf("📁 %s\n", g_current_dir);
+    }
 
     while (1) {
         char type;
         if (read(sockfd, &type, sizeof(type)) <= 0 || type == 0) break;
 
         int name_len_net;
-        read(sockfd, &name_len_net, sizeof(name_len_net));
+        if (read(sockfd, &name_len_net, sizeof(name_len_net)) <= 0) break;
         int name_len = ntohl(name_len_net);
-        
+
         char name[256];
-        read(sockfd, name, name_len);
+        if (read(sockfd, name, name_len) <= 0) break;
         name[name_len] = '\0';
 
         int depth_net;
-        read(sockfd, &depth_net, sizeof(depth_net));
+        if (read(sockfd, &depth_net, sizeof(depth_net)) <= 0) break;
         int depth = ntohl(depth_net);
 
         // 打印缩进
         for (int i = 0; i < depth; i++) {
             printf("│   ");
         }
-        
+
         // 打印项目
         if (type == 1) { // 文件
-            printf("├── %s\n", name);
+            printf("├── 📄 %s\n", name);
         } else { // 目录
-            printf("├── %s/\n", name);
+            printf("├── 📁 %s/\n", name);
         }
     }
 
@@ -893,12 +1100,15 @@ int main() {
                 }
             }
         } else if (strcmp(cmd, "list") == 0) {
-            if (strlen(g_username) == 0) printf("请先登录！\n");
-            else {
+            if (strlen(g_username) == 0) {
+                printf("请先登录！\n");
+            } else {
                 int sockfd = connect_to_server();
                 if (sockfd >= 0) {
                     send_list_files(sockfd, g_username);
-                    close(sockfd);
+                    // sockfd在send_list_files中已经被关闭
+                } else {
+                    printf("无法连接到服务器\n");
                 }
             }
         } else if (strcmp(cmd, "delete") == 0) {
@@ -906,14 +1116,21 @@ int main() {
                 printf("请先登录！\n");
             } else {
                 char* filename = strtok(NULL, " \t\n");
-                if (!filename) printf("Usage: delete <file1> [file2..]\n");
-                while (filename) {
-                    int sockfd = connect_to_server();
-                    if (sockfd >= 0) {
-                        send_delete_file(sockfd, g_username, filename);
-                        close(sockfd);
+                if (!filename) {
+                    printf("用法: delete <文件名或目录名>\n");
+                } else {
+                    while (filename) {
+                        int sockfd = connect_to_server();
+                        if (sockfd >= 0) {
+                            send_delete_file(sockfd, g_username, filename);
+                            close(sockfd);
+                            // 更新补全缓存
+                            fetch_server_entries(g_current_dir);
+                        } else {
+                            printf("无法连接到服务器\n");
+                        }
+                        filename = strtok(NULL, " \t\n");
                     }
-                    filename = strtok(NULL, " \t\n");
                 }
             }
         } else if (strcmp(cmd, "mkdir") == 0) {
@@ -930,49 +1147,82 @@ int main() {
             } else {
                 char* path = strtok(NULL, " \t\n");
                 if (!path) {
+                    // 无参数，切换到根目录
                     strcpy(g_current_dir, "/");
+                    printf("切换到根目录: /\n");
+                    fetch_server_entries(g_current_dir);
                 } else {
                     char new_path[1024];
-                    if (path[0] == '/') {
+
+                    // 处理特殊路径
+                    if (strcmp(path, "..") == 0) {
+                        // 返回上级目录
+                        if (strcmp(g_current_dir, "/") == 0) {
+                            printf("已在根目录\n");
+                            continue;
+                        } else {
+                            strcpy(new_path, g_current_dir);
+                            char *last_slash = strrchr(new_path, '/');
+                            if (last_slash && last_slash != new_path) {
+                                *last_slash = '\0';
+                            } else {
+                                strcpy(new_path, "/");
+                            }
+                        }
+                    } else if (strcmp(path, ".") == 0) {
+                        // 当前目录，不变
+                        printf("当前目录: %s\n", g_current_dir);
+                        continue;
+                    } else if (path[0] == '/') {
+                        // 绝对路径
                         strncpy(new_path, path, sizeof(new_path)-1);
+                        new_path[sizeof(new_path)-1] = '\0';
                     } else {
+                        // 相对路径
                         if (strcmp(g_current_dir, "/") == 0) {
                             snprintf(new_path, sizeof(new_path), "/%s", path);
                         } else {
                             snprintf(new_path, sizeof(new_path), "%s/%s", g_current_dir, path);
                         }
                     }
+
+                    // 规范化路径
                     normalize_path(new_path);
-                    
+
                     // 验证目录是否存在
                     int sockfd = connect_to_server();
                     if (sockfd >= 0) {
-                        char cmd = 'V';  // 新命令：验证目录
-                        write(sockfd, &cmd, sizeof(cmd));
-                        
+                        char cmd_char = 'V';  // 验证目录命令
+                        write(sockfd, &cmd_char, sizeof(cmd_char));
+
                         // 发送用户名
                         int ulen = strlen(g_username);
                         int ulen_net = htonl(ulen);
                         write(sockfd, &ulen_net, sizeof(ulen_net));
                         write(sockfd, g_username, ulen);
-                        
+
                         // 发送路径
                         int path_len = strlen(new_path);
                         int path_len_net = htonl(path_len);
                         write(sockfd, &path_len_net, sizeof(path_len_net));
                         write(sockfd, new_path, path_len);
-                        
+
                         char res;
-                        read(sockfd, &res, sizeof(res));
-                        close(sockfd);
-                        
-                        if (res) {
-                            strcpy(g_current_dir, new_path);
-                            // 更新补全缓存
-                            fetch_server_entries(g_current_dir);
+                        if (read(sockfd, &res, sizeof(res)) > 0) {
+                            if (res) {
+                                strcpy(g_current_dir, new_path);
+                                printf("切换到目录: %s\n", new_path);
+                                // 更新补全缓存
+                                fetch_server_entries(g_current_dir);
+                            } else {
+                                printf("目录不存在: %s\n", new_path);
+                            }
                         } else {
-                            printf("目录不存在: %s\n", new_path);
+                            printf("服务器通信错误\n");
                         }
+                        close(sockfd);
+                    } else {
+                        printf("无法连接到服务器\n");
                     }
                 }
             }

@@ -2,23 +2,26 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>网盘系统 - 文件管理</title>
     <link rel="stylesheet" href="css/dashboard.css">
 </head>
-<body>
+<body data-page-title="navbar.title">
     <!-- 顶部导航栏 -->
     <nav class="navbar">
         <div class="navbar-left">
             <div class="logo">☁️</div>
-            <div class="navbar-title">网盘系统</div>
+            <div class="navbar-title" data-i18n="navbar.title">网盘系统</div>
         </div>
         <div class="navbar-right">
             <div class="user-info">
                 <div class="user-avatar" id="userAvatar">👤</div>
                 <div class="user-name" id="userName">用户</div>
             </div>
-            <button class="logout-btn" onclick="logout()">
+            <button class="logout-btn" onclick="logout()" data-i18n="navbar.logout">
                 🚪 退出登录
             </button>
         </div>
@@ -27,52 +30,52 @@
     <div class="container">
         <!-- 工具栏 -->
         <div class="toolbar">
-            <button class="btn btn-success" onclick="uploadFile()" disabled id="uploadBtn">
+            <button class="btn btn-success" onclick="uploadFile()" disabled id="uploadBtn" data-i18n="toolbar.upload">
                 📤 上传文件
             </button>
-            <button class="btn btn-success" onclick="batchUpload()" disabled id="batchUploadBtn">
+            <button class="btn btn-success" onclick="batchUpload()" disabled id="batchUploadBtn" data-i18n="toolbar.batch.upload">
                 📤 批量上传
             </button>
-            <button class="btn btn-primary" onclick="downloadFile()" disabled id="downloadBtn">
+            <button class="btn btn-primary" onclick="downloadFile()" disabled id="downloadBtn" data-i18n="toolbar.download">
                 📥 下载文件
             </button>
-            <button class="btn btn-success" onclick="downloadSelected()" disabled id="batchDownloadBtn">
+            <button class="btn btn-success" onclick="downloadSelected()" disabled id="batchDownloadBtn" data-i18n="toolbar.batch.download">
                 📦 批量下载
             </button>
-            <button class="btn btn-warning" onclick="renameItem()" disabled id="renameBtn">
+            <button class="btn btn-warning" onclick="renameItem()" disabled id="renameBtn" data-i18n="toolbar.rename">
                 ✏️ 重命名
             </button>
-            <button class="btn btn-danger" onclick="deleteItem()" disabled id="deleteBtn">
+            <button class="btn btn-danger" onclick="deleteItem()" disabled id="deleteBtn" data-i18n="toolbar.delete">
                 🗑️ 删除
             </button>
-            <button class="btn btn-info" onclick="createFolder()" disabled id="createFolderBtn">
+            <button class="btn btn-info" onclick="createFolder()" disabled id="createFolderBtn" data-i18n="toolbar.create.folder">
                 📁 新建文件夹
             </button>
-            <button class="btn btn-info" onclick="refreshList()" disabled id="refreshBtn">
+            <button class="btn btn-info" onclick="refreshList()" disabled id="refreshBtn" data-i18n="toolbar.refresh">
                 🔄 刷新列表
             </button>
-            <button class="btn btn-info" onclick="selectAll()" disabled id="selectAllBtn">
+            <button class="btn btn-info" onclick="selectAll()" disabled id="selectAllBtn" data-i18n="toolbar.select.all">
                 ☑️ 全选
             </button>
-            <button class="btn btn-info" onclick="clearSelection()" disabled id="clearSelectionBtn">
+            <button class="btn btn-info" onclick="clearSelection()" disabled id="clearSelectionBtn" data-i18n="toolbar.clear.selection">
                 ❌ 取消选择
             </button>
         </div>
 
         <!-- 导航区域 -->
         <div class="navigation">
-            <button class="btn btn-info" onclick="goBack()" disabled id="backBtn">
+            <button class="btn btn-info" onclick="goBack()" disabled id="backBtn" data-i18n="nav.back">
                 ⬅️ 返回上级
             </button>
-            <span style="font-weight: bold;">📍 当前位置:</span>
+            <span style="font-weight: bold;" data-i18n="nav.current.path">📍 当前位置:</span>
             <span id="currentPathDisplay" style="font-family: monospace; background: #f8f9fa; padding: 5px 10px; border-radius: 3px;">/</span>
         </div>
 
         <!-- 上传区域 -->
         <div class="upload-area" id="uploadArea">
-            <h3>📁 拖拽文件到此处上传</h3>
-            <p>或点击上传按钮选择文件</p>
-            <p style="color: #6c757d; font-size: 14px;">将上传到: <span id="uploadPathDisplay">/</span></p>
+            <h3 data-i18n="upload.area.title">📁 拖拽文件到此处上传</h3>
+            <p data-i18n="upload.area.subtitle">或点击上传按钮选择文件</p>
+            <p style="color: #6c757d; font-size: 14px;"><span data-i18n="upload.area.path">将上传到:</span> <span id="uploadPathDisplay">/</span></p>
         </div>
         
         <!-- 文件列表 -->
@@ -80,12 +83,12 @@
             <table class="file-list" id="fileList">
                 <thead>
                     <tr>
-                        <th>☑️ 选择</th>
-                        <th>📄 名称</th>
-                        <th>📂 类型</th>
-                        <th>📊 大小</th>
-                        <th>📅 修改时间</th>
-                        <th>⚙️ 操作</th>
+                        <th data-i18n="filelist.select">☑️ 选择</th>
+                        <th data-i18n="filelist.name">📄 名称</th>
+                        <th data-i18n="filelist.type">📂 类型</th>
+                        <th data-i18n="filelist.size">📊 大小</th>
+                        <th data-i18n="filelist.modified">📅 修改时间</th>
+                        <th data-i18n="filelist.actions">⚙️ 操作</th>
                     </tr>
                 </thead>
                 <tbody id="fileTableBody">
@@ -96,26 +99,27 @@
 
         <!-- 状态栏 -->
         <div class="status-bar">
-            <span id="statusText">就绪</span>
+            <span id="statusText" data-i18n="status.ready">就绪</span>
             <div class="progress-bar">
                 <div class="progress-fill" id="progressFill"></div>
             </div>
         </div>
-        
+
         <!-- 批量上传队列显示 -->
         <div id="uploadQueueContainer" style="display: none; margin: 20px 0; padding: 15px; background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);">
-            <h4 style="margin-top: 0;">📤 上传队列</h4>
+            <h4 style="margin-top: 0;" data-i18n="upload.queue.title">📤 上传队列</h4>
             <div id="uploadQueue"></div>
             <div style="margin-top: 10px;">
-                <button class="btn btn-danger" onclick="clearUploadQueue()" id="clearQueueBtn">🗑️ 清空队列</button>
-                <button class="btn btn-warning" onclick="pauseUpload()" id="pauseBtn" style="display: none;">⏸️ 暂停</button>
-                <button class="btn btn-success" onclick="resumeUpload()" id="resumeBtn" style="display: none;">▶️ 继续</button>
+                <button class="btn btn-danger" onclick="clearUploadQueue()" id="clearQueueBtn" data-i18n="upload.queue.clear">🗑️ 清空队列</button>
+                <button class="btn btn-warning" onclick="pauseUpload()" id="pauseBtn" style="display: none;" data-i18n="upload.queue.pause">⏸️ 暂停</button>
+                <button class="btn btn-success" onclick="resumeUpload()" id="resumeBtn" style="display: none;" data-i18n="upload.queue.resume">▶️ 继续</button>
                 <span id="queueStatus" style="margin-left: 15px; font-weight: bold;"></span>
             </div>
         </div>
     </div>
 
     <!-- 引入JavaScript模块 -->
+    <script src="js/i18n-manager.js"></script>
     <script src="js/api-config.js"></script>
     <script src="js/ui-utils.js"></script>
     <script src="js/auth-manager.js"></script>

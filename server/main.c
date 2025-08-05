@@ -80,6 +80,9 @@ void sha256_string(const char *str, char *out_hex);
 
 #define PORT 9000
 
+// 函数声明
+void send_directory_tree(int conn_fd, const char* dir_path, int depth);
+
 void * handle_client(void *arg) {
     int conn_fd = *(int *)arg;
     free(arg); // Free the allocated memory for connection file descriptor
@@ -286,7 +289,7 @@ void * handle_client(void *arg) {
         }
     }
     else if(cmd=='D'){// 下载文件
-        //1.读取用户名长度
+        // 读取用户名
         int ulen_net;
         read(conn_fd, &ulen_net, sizeof(ulen_net));
         int ulen = ntohl(ulen_net);
@@ -294,19 +297,33 @@ void * handle_client(void *arg) {
         read(conn_fd, username, ulen);
         username[ulen] = '\0';
 
-        //1.读取文件名长度
+        // 读取当前目录路径
+        int dir_len_net;
+        read(conn_fd, &dir_len_net, sizeof(dir_len_net));
+        int dir_len = ntohl(dir_len_net);
+        char current_dir[1024];
+        read(conn_fd, current_dir, dir_len);
+        current_dir[dir_len] = '\0';
+
+        // 读取文件名
         int name_len_net;
         read(conn_fd, &name_len_net, sizeof(name_len_net));
         int name_len = ntohl(name_len_net);
-
-        //2.读取文件名
         char filename[name_len + 1];
         read(conn_fd, filename, name_len);
         filename[name_len] = '\0';
 
-        //拼接专属用户目录
-        char filepath[256];
-        snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+        // 构建完整文件路径
+        char filepath[1024];
+        if (strcmp(current_dir, "/") == 0) {
+            snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+        } else {
+            if (current_dir[0] == '/') {
+                snprintf(filepath, sizeof(filepath), "netdisk_data/%s%s/%s", username, current_dir, filename);
+            } else {
+                snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s/%s", username, current_dir, filename);
+            }
+        }
 
         //3.打开文件
         FILE *fp = fopen(filepath, "rb");
@@ -400,7 +417,7 @@ void * handle_client(void *arg) {
         closedir(dir);
         close(conn_fd);
         pthread_exit(NULL);
-    } else if(cmd == 'X') { // 删除文件
+    } else if(cmd == 'X') { // 删除文件或目录
         // 读取用户名
         int ulen_net;
         read(conn_fd, &ulen_net, sizeof(ulen_net));
@@ -408,6 +425,14 @@ void * handle_client(void *arg) {
         char username[ulen + 1];
         read(conn_fd, username, ulen);
         username[ulen] = '\0';
+
+        // 读取当前目录路径
+        int dir_len_net;
+        read(conn_fd, &dir_len_net, sizeof(dir_len_net));
+        int dir_len = ntohl(dir_len_net);
+        char current_dir[1024];
+        read(conn_fd, current_dir, dir_len);
+        current_dir[dir_len] = '\0';
 
         // 读取文件名
         int name_len_net;
@@ -417,12 +442,37 @@ void * handle_client(void *arg) {
         read(conn_fd, filename, name_len);
         filename[name_len] = '\0';
 
-        // 拼接文件路径
-        char filepath[256];
-        snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+        // 构建完整文件路径
+        char filepath[1024];
+        if (strcmp(current_dir, "/") == 0) {
+            snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s", username, filename);
+        } else {
+            if (current_dir[0] == '/') {
+                snprintf(filepath, sizeof(filepath), "netdisk_data/%s%s/%s", username, current_dir, filename);
+            } else {
+                snprintf(filepath, sizeof(filepath), "netdisk_data/%s/%s/%s", username, current_dir, filename);
+            }
+        }
 
-        // 删除文件
-        char res = (remove(filepath) == 0) ? 1 : 0;
+        // 检查文件/目录是否存在并删除
+        struct stat st;
+        char res = 0;
+        if (stat(filepath, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                // 删除目录（需要递归删除）
+                res = (rmdir(filepath) == 0) ? 1 : 0;
+                if (!res) {
+                    // 如果目录不为空，尝试递归删除
+                    char cmd_buf[2048];
+                    snprintf(cmd_buf, sizeof(cmd_buf), "rm -rf \"%s\"", filepath);
+                    res = (system(cmd_buf) == 0) ? 1 : 0;
+                }
+            } else {
+                // 删除文件
+                res = (remove(filepath) == 0) ? 1 : 0;
+            }
+        }
+
         write(conn_fd, &res, sizeof(res));
         close(conn_fd);
         pthread_exit(NULL);
@@ -730,12 +780,92 @@ void * handle_client(void *arg) {
         struct stat st;
         char res = (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
         write(conn_fd, &res, sizeof(res));
+    } else if(cmd == 'Y') { // 获取指定目录的树结构
+        // 读取用户名
+        int ulen_net;
+        read(conn_fd, &ulen_net, sizeof(ulen_net));
+        int ulen = ntohl(ulen_net);
+        char username[ulen + 1];
+        read(conn_fd, username, ulen);
+        username[ulen] = '\0';
+
+        // 读取目录路径
+        int dir_len_net;
+        read(conn_fd, &dir_len_net, sizeof(dir_len_net));
+        int dir_len = ntohl(dir_len_net);
+        char dir_path[1024];
+        read(conn_fd, dir_path, dir_len);
+        dir_path[dir_len] = '\0';
+
+        // 构建完整路径
+        char full_path[1024];
+        if (strcmp(dir_path, "/") == 0) {
+            snprintf(full_path, sizeof(full_path), "netdisk_data/%s", username);
+        } else {
+            if (dir_path[0] == '/') {
+                snprintf(full_path, sizeof(full_path), "netdisk_data/%s%s", username, dir_path);
+            } else {
+                snprintf(full_path, sizeof(full_path), "netdisk_data/%s/%s", username, dir_path);
+            }
+        }
+
+        // 检查目录是否存在
+        struct stat st;
+        char res = (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
+        write(conn_fd, &res, sizeof(res));
+
+        if (res) {
+            // 递归发送目录树
+            send_directory_tree(conn_fd, full_path, 0);
+            // 发送结束标记
+            char end_marker = 0;
+            write(conn_fd, &end_marker, sizeof(end_marker));
+        }
     }
 
     // 关闭连接
     sqlite3_close(db);
     close(conn_fd); // Close the connection
     pthread_exit(NULL); // Exit the thread
+}
+
+// 递归发送目录树结构
+void send_directory_tree(int conn_fd, const char* dir_path, int depth) {
+    DIR *dir = opendir(dir_path);
+    if (!dir) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // 跳过 . 和 ..
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
+
+        struct stat st;
+        if (stat(full_path, &st) == 0) {
+            char type = S_ISDIR(st.st_mode) ? 2 : 1; // 2=目录, 1=文件
+            write(conn_fd, &type, sizeof(type));
+
+            // 发送文件名
+            int name_len = strlen(entry->d_name);
+            int name_len_net = htonl(name_len);
+            write(conn_fd, &name_len_net, sizeof(name_len_net));
+            write(conn_fd, entry->d_name, name_len);
+
+            // 发送深度
+            int depth_net = htonl(depth);
+            write(conn_fd, &depth_net, sizeof(depth_net));
+
+            // 如果是目录，递归处理
+            if (S_ISDIR(st.st_mode)) {
+                send_directory_tree(conn_fd, full_path, depth + 1);
+            }
+        }
+    }
+    closedir(dir);
 }
 
 void sha256_string(const char *str, char *out_hex) {

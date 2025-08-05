@@ -2,33 +2,43 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>网盘系统 - 登录</title>
-
+    <link rel="stylesheet" href="css/login.css">
 </head>
-<body>
+<body data-page-title="login.title">
     <div class="login-container">
         <div class="logo">☁️</div>
-        <h1 class="title">网盘系统</h1>
-        <p class="subtitle">安全、便捷的文件存储与管理</p>
+        <h1 class="title" data-i18n="login.title">网盘系统</h1>
+        <p class="subtitle" data-i18n="login.subtitle">安全、便捷的文件存储与管理</p>
         
         <form id="loginForm">
             <div class="form-group">
-                <label for="username">用户名</label>
-                <input type="text" id="username" placeholder="请输入用户名" required>
+                <label for="username" data-i18n="username">用户名</label>
+                <input type="text" id="username" data-i18n-placeholder="login.username.placeholder" placeholder="请输入用户名" required>
             </div>
             <div class="form-group">
-                <label for="password">密码</label>
-                <input type="password" id="password" placeholder="请输入密码" required>
+                <label for="password" data-i18n="password">密码</label>
+                <input type="password" id="password" data-i18n-placeholder="login.password.placeholder" placeholder="请输入密码" required>
             </div>
-            
-            <button type="submit" class="btn btn-primary" id="loginBtn">
+
+            <button type="submit" class="btn btn-primary" id="loginBtn" data-i18n="login.button">
                 登录
             </button>
-            <button type="button" class="btn btn-secondary" onclick="showRegister()">
+            <button type="button" class="btn btn-secondary" onclick="showRegister()" data-i18n="login.register.button">
                 注册新账户
             </button>
         </form>
+
+        <!-- 语言切换按钮 -->
+        <div style="text-align: center; margin-top: 20px;">
+            <button id="languageToggle" class="btn btn-secondary" style="padding: 8px 16px; font-size: 14px;" onclick="window.i18n && window.i18n.switchLanguage()">
+                🌐 EN
+            </button>
+        </div>
 
         <div class="loading" id="loading">
             <div class="spinner"></div>
@@ -38,12 +48,11 @@
         <div class="status-message" id="statusMessage"></div>
 
         <div class="footer">
-            <p>© 2025 网盘系统. 保护您的数据安全.</p>
+            <p data-i18n="login.footer">© 2025 网盘系统. 保护您的数据安全.</p>
         </div>
     </div>
 
-    <link rel="stylesheet" href="css/login.css">
-
+    <script src="js/i18n-manager.js"></script>
     <script src="js/api-config.js"></script>
     <script src="js/ui-utils.js"></script>
     <script src="js/auth-manager.js"></script>

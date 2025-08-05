@@ -88,14 +88,15 @@ class FileManager {
 
             row.innerHTML = `
                 <td>
-                    <input type="checkbox" data-filename="${file.name}"
+                    <input type="checkbox" data-filename="${file.name}" id="checkbox-${file.name}"
                            onchange="fileManager.toggleFileSelection('${file.name}', this.checked)"
-                           ${isDirectory ? 'disabled title="文件夹不支持批量下载"' : ''}>
+                           ${isDirectory ? 'disabled title="文件夹不支持批量下载"' : ''}
+                           style="cursor: pointer;">
                 </td>
-                <td>
+                <td onclick="fileManager.handleRowClick('${file.name}', ${isDirectory})" style="cursor: pointer;">
                     <span class="file-icon">${icon}</span>
-                    ${isDirectory ? 
-                        `<a href="javascript:void(0)" onclick="fileManager.enterFolder('${file.name}')" style="text-decoration: none; color: #007bff;">${file.name}</a>` : 
+                    ${isDirectory ?
+                        `<span style="color: #007bff; font-weight: 500;">${file.name}</span>` :
                         file.name
                     }
                 </td>
@@ -103,14 +104,25 @@ class FileManager {
                 <td>${sizeText}</td>
                 <td>${Utils.formatTime(file.mtime)}</td>
                 <td>
-                    <button class="btn btn-primary" onclick="fileManager.selectItem('${file.name}', ${isDirectory})" style="padding: 5px 10px; font-size: 12px;">选择</button>
-                    ${isDirectory ? 
-                        `<button class="btn btn-info" onclick="fileManager.enterFolder('${file.name}')" style="margin-left: 5px; padding: 5px 10px; font-size: 12px;">进入</button>` : 
+                    <button class="btn btn-primary" onclick="fileManager.selectItem('${file.name}', ${isDirectory})"
+                            style="padding: 5px 10px; font-size: 12px; margin-right: 3px;"
+                            data-i18n="filelist.select.button">选择</button>
+                    ${isDirectory ?
+                        `<button class="btn btn-info" onclick="fileManager.enterFolder('${file.name}')"
+                                style="padding: 5px 10px; font-size: 12px;"
+                                data-i18n="filelist.enter.button">进入</button>` :
                         ''
                     }
                 </td>
             `;
+
+            tbody.appendChild(row);
         });
+
+        // 重新应用国际化
+        if (window.i18n) {
+            window.i18n.updateUI();
+        }
     }
 
     // 获取文件图标
@@ -127,16 +139,35 @@ class FileManager {
         return iconMap[ext] || '📄';
     }
 
+    // 处理行点击事件（移动端优化）
+    handleRowClick(filename, isDirectory) {
+        if (isDirectory) {
+            // 在移动端，点击目录名直接进入
+            if (window.innerWidth <= 768) {
+                this.enterFolder(filename);
+            } else {
+                this.selectItem(filename, isDirectory);
+            }
+        } else {
+            this.selectItem(filename, isDirectory);
+        }
+    }
+
     // 选择文件
     selectItem(filename, isDirectory) {
         // 清除之前的选择
         const rows = document.querySelectorAll('#fileTableBody tr');
         rows.forEach(row => row.classList.remove('selected'));
-        
+
         // 选择当前行
-        event.target.closest('tr').classList.add('selected');
+        if (event && event.target) {
+            const row = event.target.closest('tr');
+            if (row) {
+                row.classList.add('selected');
+            }
+        }
         this.selectedFile = filename;
-        
+
         UI.setStatus('已选择: ' + filename + (isDirectory ? ' (文件夹)' : ' (文件)'));
     }
 

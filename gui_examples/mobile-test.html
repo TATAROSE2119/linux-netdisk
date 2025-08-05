@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <title>移动端测试 - 网盘系统</title>
+    <link rel="stylesheet" href="css/dashboard.css">
+    <style>
+        .test-info {
+            background: #e3f2fd;
+            padding: 15px;
+            margin: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #2196f3;
+        }
+        .device-info {
+            background: #f3e5f5;
+            padding: 10px;
+            margin: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <nav class="navbar">
+        <div class="navbar-left">
+            <div class="logo">📱</div>
+            <div class="navbar-title" data-i18n="navbar.title">移动端测试</div>
+        </div>
+        <div class="navbar-right">
+            <div class="user-info">
+                <div class="user-avatar">👤</div>
+                <div class="user-name">测试用户</div>
+            </div>
+            <button class="logout-btn" data-i18n="navbar.logout">🚪 退出</button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- 设备信息 -->
+        <div class="device-info" id="deviceInfo">
+            正在检测设备信息...
+        </div>
+
+        <!-- 测试说明 -->
+        <div class="test-info">
+            <h3>📱 移动端适配测试</h3>
+            <p>此页面用于测试网盘系统在移动设备上的显示效果：</p>
+            <ul>
+                <li>✅ 响应式布局</li>
+                <li>✅ 触摸友好的按钮大小</li>
+                <li>✅ 水平滚动的文件列表</li>
+                <li>✅ 优化的复选框大小</li>
+                <li>✅ 移动端特定的交互</li>
+            </ul>
+        </div>
+
+        <!-- 工具栏 -->
+        <div class="toolbar">
+            <button class="btn btn-success">📤 上传</button>
+            <button class="btn btn-primary">📥 下载</button>
+            <button class="btn btn-warning">✏️ 重命名</button>
+            <button class="btn btn-danger">🗑️ 删除</button>
+            <button class="btn btn-info">📁 新建</button>
+            <button class="btn btn-info">🔄 刷新</button>
+            <button class="btn btn-info">☑️ 全选</button>
+            <button class="btn btn-info">❌ 取消</button>
+        </div>
+
+        <!-- 导航区域 -->
+        <div class="navigation">
+            <button class="btn btn-info">⬅️ 返回</button>
+            <span style="font-weight: bold;">📍 当前位置:</span>
+            <span style="font-family: monospace; background: #f8f9fa; padding: 5px 10px; border-radius: 3px;">/测试目录/子目录</span>
+        </div>
+
+        <!-- 文件列表 -->
+        <div class="file-list-container">
+            <table class="file-list">
+                <thead>
+                    <tr>
+                        <th>☑️ 选择</th>
+                        <th>📄 名称</th>
+                        <th>📂 类型</th>
+                        <th>📊 大小</th>
+                        <th>📅 修改时间</th>
+                        <th>⚙️ 操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><input type="checkbox" style="cursor: pointer;"></td>
+                        <td><span class="file-icon">📁</span> 文档目录</td>
+                        <td>文件夹</td>
+                        <td>-</td>
+                        <td>2024-01-15 10:30</td>
+                        <td>
+                            <button class="btn btn-primary" style="padding: 5px 10px; font-size: 12px; margin-right: 3px;">选择</button>
+                            <button class="btn btn-info" style="padding: 5px 10px; font-size: 12px;">进入</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><input type="checkbox" style="cursor: pointer;"></td>
+                        <td><span class="file-icon">📄</span> 重要文档.pdf</td>
+                        <td>文件</td>
+                        <td>2.5 MB</td>
+                        <td>2024-01-15 09:15</td>
+                        <td>
+                            <button class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">选择</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><input type="checkbox" style="cursor: pointer;"></td>
+                        <td><span class="file-icon">🖼️</span> 照片.jpg</td>
+                        <td>文件</td>
+                        <td>1.8 MB</td>
+                        <td>2024-01-14 16:45</td>
+                        <td>
+                            <button class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">选择</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><input type="checkbox" style="cursor: pointer;"></td>
+                        <td><span class="file-icon">📊</span> 数据表格.xlsx</td>
+                        <td>文件</td>
+                        <td>856 KB</td>
+                        <td>2024-01-14 14:20</td>
+                        <td>
+                            <button class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">选择</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><input type="checkbox" style="cursor: pointer;"></td>
+                        <td><span class="file-icon">🎵</span> 音乐文件.mp3</td>
+                        <td>文件</td>
+                        <td>4.2 MB</td>
+                        <td>2024-01-13 20:10</td>
+                        <td>
+                            <button class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">选择</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 状态栏 -->
+        <div class="status-bar">
+            <span>已选择 0 个文件</span>
+            <div class="progress-bar">
+                <div class="progress-fill" style="width: 0%;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/i18n-manager.js"></script>
+    <script>
+        // 显示设备信息
+        function showDeviceInfo() {
+            const info = document.getElementById('deviceInfo');
+            const userAgent = navigator.userAgent;
+            const screenWidth = window.screen.width;
+            const screenHeight = window.screen.height;
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const pixelRatio = window.devicePixelRatio || 1;
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+            const isTouch = 'ontouchstart' in window;
+            
+            info.innerHTML = `
+                <strong>设备信息:</strong><br>
+                屏幕尺寸: ${screenWidth} × ${screenHeight}<br>
+                视口尺寸: ${viewportWidth} × ${viewportHeight}<br>
+                像素比: ${pixelRatio}<br>
+                移动设备: ${isMobile ? '是' : '否'}<br>
+                触摸支持: ${isTouch ? '是' : '否'}<br>
+                用户代理: ${userAgent.substring(0, 80)}...
+            `;
+        }
+
+        // 页面加载完成后显示设备信息
+        document.addEventListener('DOMContentLoaded', showDeviceInfo);
+        
+        // 监听窗口大小变化
+        window.addEventListener('resize', showDeviceInfo);
+        window.addEventListener('orientationchange', () => {
+            setTimeout(showDeviceInfo, 100);
+        });
+
+        // 添加触摸反馈
+        document.addEventListener('touchstart', (e) => {
+            if (e.target.classList.contains('btn')) {
+                e.target.style.transform = 'scale(0.95)';
+                e.target.style.opacity = '0.8';
+            }
+        });
+        
+        document.addEventListener('touchend', (e) => {
+            if (e.target.classList.contains('btn')) {
+                setTimeout(() => {
+                    e.target.style.transform = '';
+                    e.target.style.opacity = '';
+                }, 150);
+            }
+        });
+
+        // 测试复选框功能
+        document.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                const row = this.closest('tr');
+                if (this.checked) {
+                    row.classList.add('selected');
+                } else {
+                    row.classList.remove('selected');
+                }
+                
+                const checkedCount = document.querySelectorAll('input[type="checkbox"]:checked').length;
+                document.querySelector('.status-bar span').textContent = `已选择 ${checkedCount} 个文件`;
+            });
+        });
+    </script>
+</body>
+</html>

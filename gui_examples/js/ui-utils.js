@@ -6,6 +6,72 @@
 class UIUtils {
     constructor() {
         // UI工具初始化
+        this.initMobileOptimizations();
+    }
+
+    // 初始化移动端优化
+    initMobileOptimizations() {
+        // 检测是否为移动设备
+        this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+        if (this.isMobile) {
+            // 添加移动端特定的CSS类
+            document.body.classList.add('mobile-device');
+
+            // 优化触摸滚动
+            this.optimizeTouchScrolling();
+
+            // 添加触摸反馈
+            this.addTouchFeedback();
+        }
+
+        // 监听屏幕方向变化
+        window.addEventListener('orientationchange', () => {
+            setTimeout(() => {
+                this.handleOrientationChange();
+            }, 100);
+        });
+    }
+
+    // 优化触摸滚动
+    optimizeTouchScrolling() {
+        const scrollableElements = document.querySelectorAll('.file-list-container');
+        scrollableElements.forEach(element => {
+            element.style.webkitOverflowScrolling = 'touch';
+            element.style.overflowScrolling = 'touch';
+        });
+    }
+
+    // 添加触摸反馈
+    addTouchFeedback() {
+        // 为所有按钮添加触摸反馈
+        document.addEventListener('touchstart', (e) => {
+            if (e.target.classList.contains('btn')) {
+                e.target.style.transform = 'scale(0.95)';
+                e.target.style.opacity = '0.8';
+            }
+        });
+
+        document.addEventListener('touchend', (e) => {
+            if (e.target.classList.contains('btn')) {
+                setTimeout(() => {
+                    e.target.style.transform = '';
+                    e.target.style.opacity = '';
+                }, 150);
+            }
+        });
+    }
+
+    // 处理屏幕方向变化
+    handleOrientationChange() {
+        // 重新计算表格布局
+        const fileListContainer = document.querySelector('.file-list-container');
+        if (fileListContainer) {
+            // 强制重新渲染
+            fileListContainer.style.display = 'none';
+            fileListContainer.offsetHeight; // 触发重排
+            fileListContainer.style.display = '';
+        }
     }
 
     // 设置状态文本
