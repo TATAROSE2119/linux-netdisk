@@ -10,9 +10,9 @@
       "server/main.o",
       "server/main.c"
     ],
-    "directory": "/Users/tatarose/linux-netdisk",
-    "file": "/Users/tatarose/linux-netdisk/server/main.c",
-    "output": "/Users/tatarose/linux-netdisk/server/main.o"
+    "directory": "/mnt/d/linux-netdisk/linux-netdisk",
+    "file": "/mnt/d/linux-netdisk/linux-netdisk/server/main.c",
+    "output": "/mnt/d/linux-netdisk/linux-netdisk/server/main.o"
   },
   {
     "arguments": [
@@ -25,8 +25,8 @@
       "client/main.o",
       "client/main.c"
     ],
-    "directory": "/Users/tatarose/linux-netdisk",
-    "file": "/Users/tatarose/linux-netdisk/client/main.c",
-    "output": "/Users/tatarose/linux-netdisk/client/main.o"
+    "directory": "/mnt/d/linux-netdisk/linux-netdisk",
+    "file": "/mnt/d/linux-netdisk/linux-netdisk/client/main.c",
+    "output": "/mnt/d/linux-netdisk/linux-netdisk/client/main.o"
   }
 ]

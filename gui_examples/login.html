@@ -7,22 +7,28 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>网盘系统 - 登录</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/login.css">
 </head>
 <body data-page-title="login.title">
+    <!-- 动态粒子背景 -->
+    <div class="particles" id="particles"></div>
+
     <div class="login-container">
         <div class="logo">☁️</div>
         <h1 class="title" data-i18n="login.title">网盘系统</h1>
         <p class="subtitle" data-i18n="login.subtitle">安全、便捷的文件存储与管理</p>
-        
+
         <form id="loginForm">
             <div class="form-group">
                 <label for="username" data-i18n="username">用户名</label>
-                <input type="text" id="username" data-i18n-placeholder="login.username.placeholder" placeholder="请输入用户名" required>
+                <input type="text" id="username" data-i18n-placeholder="login.username.placeholder" placeholder="请输入用户名" required autocomplete="username">
             </div>
             <div class="form-group">
                 <label for="password" data-i18n="password">密码</label>
-                <input type="password" id="password" data-i18n-placeholder="login.password.placeholder" placeholder="请输入密码" required>
+                <input type="password" id="password" data-i18n-placeholder="login.password.placeholder" placeholder="请输入密码" required autocomplete="current-password">
             </div>
 
             <button type="submit" class="btn btn-primary" id="loginBtn" data-i18n="login.button">
@@ -34,15 +40,13 @@
         </form>
 
         <!-- 语言切换按钮 -->
-        <div style="text-align: center; margin-top: 20px;">
-            <button id="languageToggle" class="btn btn-secondary" style="padding: 8px 16px; font-size: 14px;" onclick="window.i18n && window.i18n.switchLanguage()">
-                🌐 EN
-            </button>
-        </div>
+        <button id="languageToggle" onclick="window.i18n && window.i18n.switchLanguage()">
+            🌐 EN
+        </button>
 
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <p>正在登录...</p>
+            <p data-i18n="login.loading">正在登录...</p>
         </div>
 
         <div class="status-message" id="statusMessage"></div>
@@ -55,9 +59,29 @@
     <script src="js/i18n-manager.js"></script>
     <script src="js/api-config.js"></script>
     <script src="js/ui-utils.js"></script>
+    <script src="js/ui-animations.js"></script>
     <script src="js/auth-manager.js"></script>
     <script src="js/login.js"></script>
+    <script>
+        // 创建动态粒子效果
+        function createParticles() {
+            const container = document.getElementById('particles');
+            const particleCount = 30;
 
+            for (let i = 0; i < particleCount; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'particle';
+                particle.style.left = Math.random() * 100 + '%';
+                particle.style.animationDelay = Math.random() * 15 + 's';
+                particle.style.animationDuration = (15 + Math.random() * 10) + 's';
+                particle.style.width = (2 + Math.random() * 4) + 'px';
+                particle.style.height = particle.style.width;
+                particle.style.opacity = 0.2 + Math.random() * 0.3;
+                container.appendChild(particle);
+            }
+        }
 
+        createParticles();
+    </script>
 </body>
 </html>

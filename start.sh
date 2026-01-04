@@ -1,4 +1,4 @@
-ash
+#!/bin/bash
 
 # 网盘服务一键启动脚本
 
@@ -57,7 +57,7 @@ check_dependencies() {
     python3 -c "import flask, flask_cors, requests" 2>/dev/null
     if [ $? -ne 0 ]; then
         log_warning "安装Python依赖..."
-        pip3 install flask flask-cors requests
+        pip3 install --break-system-packages --break-system-packages flask flask-cors requests
     fi
     
     log_success "依赖检查完成"

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eBPF Debugger - NetDisk</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>eBPF Debugger</h1>
+            <div class="status-bar">
+                <span id="status-indicator" class="status-dot"></span>
+                <span id="status-text" data-i18n="status.connecting">Connecting...</span>
+                <button id="toggle-btn" class="btn" data-i18n="btn.start">Start</button>
+                <button id="lang-btn" class="btn lang-btn" onclick="toggleLanguage()">中文</button>
+            </div>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="network" data-i18n="tab.network">Network</button>
+            <button class="tab-btn" data-tab="syscall" data-i18n="tab.syscall">Syscalls</button>
+            <button class="tab-btn" data-tab="perf" data-i18n="tab.perf">Performance</button>
+        </div>
+
+        <!-- Network Panel -->
+        <div id="network-panel" class="panel active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3 data-i18n="network.activeConn">Active Connections</h3>
+                    <div class="stat-value" id="active-connections">0</div>
+                </div>
+                <div class="stat-card">
+                    <h3 data-i18n="network.totalSent">Total Sent</h3>
+                    <div class="stat-value" id="total-sent">0 B</div>
+                </div>
+                <div class="stat-card">
+                    <h3 data-i18n="network.totalRecv">Total Received</h3>
+                    <div class="stat-value" id="total-recv">0 B</div>
+                </div>
+                <div class="stat-card">
+                    <h3 data-i18n="network.totalConn">Total Connections</h3>
+                    <div class="stat-value" id="total-connections">0</div>
+                </div>
+            </div>
+
+            <div class="charts-row">
+                <div class="chart-container">
+                    <h3 data-i18n="network.throughput">Throughput</h3>
+                    <canvas id="throughput-chart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3 data-i18n="network.connections">Connections</h3>
+                    <canvas id="connections-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <h3 data-i18n="network.activeConnList">Active Connections</h3>
+                <table id="connections-table">
+                    <thead>
+                        <tr>
+                            <th>PID</th>
+                            <th data-i18n="table.process">Process</th>
+                            <th data-i18n="table.source">Source</th>
+                            <th data-i18n="table.dest">Destination</th>
+                            <th data-i18n="table.sent">Sent</th>
+                            <th data-i18n="table.recv">Received</th>
+                            <th data-i18n="table.duration">Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="events-container">
+                <h3 data-i18n="network.recentEvents">Recent Events</h3>
+                <div id="network-events" class="events-list"></div>
+            </div>
+        </div>
+
+        <!-- Syscall Panel -->
+        <div id="syscall-panel" class="panel">
+            <div class="charts-row">
+                <div class="chart-container">
+                    <h3 data-i18n="syscall.distribution">Syscall Distribution</h3>
+                    <canvas id="syscall-pie-chart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3 data-i18n="syscall.rate">Syscall Rate</h3>
+                    <canvas id="syscall-rate-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <h3 data-i18n="syscall.topSyscalls">Top Syscalls</h3>
+                <table id="syscalls-table">
+                    <thead>
+                        <tr>
+                            <th data-i18n="table.syscall">Syscall</th>
+                            <th data-i18n="table.count">Count</th>
+                            <th data-i18n="table.avgTime">Avg Time (us)</th>
+                            <th data-i18n="table.errors">Errors</th>
+                            <th data-i18n="table.errorRate">Error Rate</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="table-container">
+                <h3 data-i18n="syscall.fileIO">File I/O Statistics</h3>
+                <table id="file-io-table">
+                    <thead>
+                        <tr>
+                            <th data-i18n="table.file">File</th>
+                            <th data-i18n="table.read">Read</th>
+                            <th data-i18n="table.write">Write</th>
+                            <th data-i18n="table.rCount">R Count</th>
+                            <th data-i18n="table.wCount">W Count</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="events-container">
+                <h3 data-i18n="syscall.recentSyscalls">Recent Syscalls</h3>
+                <div id="syscall-events" class="events-list"></div>
+            </div>
+        </div>
+
+        <!-- Performance Panel -->
+        <div id="perf-panel" class="panel">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3 data-i18n="perf.ctxSwitches">Context Switches</h3>
+                    <div class="stat-value" id="context-switches">0</div>
+                </div>
+                <div class="stat-card">
+                    <h3 data-i18n="perf.monitoredFuncs">Monitored Functions</h3>
+                    <div class="stat-value" id="monitored-funcs">0</div>
+                </div>
+            </div>
+
+            <div class="charts-row">
+                <div class="chart-container">
+                    <h3 data-i18n="perf.ctxSwitchRate">Context Switch Rate</h3>
+                    <canvas id="context-switch-chart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3 data-i18n="perf.funcCallTime">Function Call Time</h3>
+                    <canvas id="func-time-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <h3 data-i18n="perf.funcStats">Function Statistics (uprobe)</h3>
+                <table id="functions-table">
+                    <thead>
+                        <tr>
+                            <th data-i18n="table.function">Function</th>
+                            <th data-i18n="table.calls">Calls</th>
+                            <th data-i18n="table.total">Total (ms)</th>
+                            <th data-i18n="table.avg">Avg (us)</th>
+                            <th data-i18n="table.min">Min (us)</th>
+                            <th data-i18n="table.max">Max (us)</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="events-container">
+                <h3 data-i18n="perf.recentFuncCalls">Recent Function Calls</h3>
+                <div id="perf-events" class="events-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/i18n.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/realtime.js"></script>
+</body>
+</html>
