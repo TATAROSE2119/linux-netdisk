@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Clangd
+.cache/
+.clangd/
+
+# Build artifacts
+*.o
+client/client
+server/server
+compile_commands.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime data
+server/netdisk.db
+server/netdisk_data/
+
+# Claude Code
+.claude/
