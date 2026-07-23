@@ -25,3 +25,9 @@ server/netdisk_data/
 
 # Claude Code
 .claude/
+
+# libbpf generated artifacts
+ebpf_debugger/libbpf/vmlinux.h
+ebpf_debugger/libbpf/*.bpf.o
+ebpf_debugger/libbpf/*.skel.h
+ebpf_debugger/libbpf/netdisk_loader

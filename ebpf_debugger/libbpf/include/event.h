@@ -1,0 +1,46 @@
+#ifndef NETDISK_EVENTS_H
+#define NETDISK_EVENTS_H
+
+#ifndef __VMLINUX_H__
+#include <linux/types.h>
+#endif
+
+enum netdisk_event_kind {
+	NETDISK_EVENTS_NETWORK = 1,
+	NETDISK_EVENTS_SYSCALL = 2,
+	NETDISK_EVENTS_PERF = 3,
+	NETDISK_EVENTS_UPROBE = 4,
+};
+
+enum netdisk_network_action {
+	NETDISK_NET_CONNECT = 1,
+	NETDISK_NET_ACCEPT = 2,
+	NETDISK_NET_CLOSE = 3,
+	NETDISK_NET_SEND = 4,
+	NETDISK_NET_RECV = 5,
+};
+
+struct netdisk_network_event {
+	__u32 pid; __u32 tid; __u64 timestamp_ns; __u64 bytes;
+
+	__u32 saddr;
+	__u32 daddr;
+	__u16 sport;
+	__u16 dport;
+
+	__u8 action;
+	__u8 reserved[3];
+
+	char comm[16];
+};
+
+struct netdisk_event {
+	__u32 kind;
+	__u32 reserved;
+
+	union{
+		struct netdisk_network_event network;
+	};
+};
+
+#endif

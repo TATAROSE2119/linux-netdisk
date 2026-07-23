@@ -1,0 +1,14 @@
+---
+BasedOnStyle: LLVM
+IndentWidth: 8
+TabWidth: 8
+UseTab: Always
+# 不对 #include 做任何处理：不排序、不合并/重组 include 块，原样保留
+SortIncludes: Never
+IncludeBlocks: Preserve
+BreakBeforeBraces: Linux
+IndentCaseLabels: false
+AlignAfterOpenBracket: Align
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+ColumnLimit: 80
