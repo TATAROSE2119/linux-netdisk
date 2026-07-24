@@ -5,8 +5,6 @@
 #include <bpf/bpf_tracing.h>
 
 #include <bpf/bpf_helpers.h>
-// #include <sys/cdefs.h>
-// #include <linux/bpf.h>
 #include "include/events.h"
 
 #define NETDISK_AF_INET 2
@@ -55,30 +53,79 @@ static __always_inline void read_sock_info(struct sock *sk,
 	dport_be = BPF_CORE_READ(sk, __sk_common.skc_dport);
 	*dport = bpf_ntohs(dport_be);
 }
-//检查 socket、PID 和地址族。
-static __always_inline int emit_network_event(
-    struct sock *sk,
-    __u8 action,
-    __u64 timestamp_ns
-){
-    __u64 pid_tgid;
-    __u32 pid;
-    __u16 family;
+// 检查 socket、PID 和地址族。
+static __always_inline int emit_network_event(struct sock *sk, __u8 action,
+					      __u64 timestamp_ns)
+{
+	struct netdisk_event *event; // 将指向 ring buffer
+				     // 为本次事件预留的内存。
+	__u64 pid_tgid;
+	__u32 pid;
+	__u16 family;
 
-    if (!sk) {
-        return 0;
-    }
-    pid_tgid=bpf_get_current_pid_tgid();
-    pid=pid_tgid>>32;
+	if (!sk) {
+		return 0;
+	}
+	pid_tgid = bpf_get_current_pid_tgid();
+	pid = pid_tgid >> 32;
 
-    if (!should_trace(pid)) {
-        return 0;
-    }
-    family=BPF_CORE_READ(sk, __sk_common.skc_family);
-    if (family != NETDISK_AF_INET) {
-        return 0;
-    }
+	if (!should_trace(pid)) {
+		return 0;
+	}
+	family = BPF_CORE_READ(sk, __sk_common.skc_family);
+	if (family != NETDISK_AF_INET) {
+		return 0;
+	}
 
-    return 0;
+	event = bpf_ringbuf_reserve(&event, sizeof(*event),
+				    0); // 这行向 ring buffer 申请一块内存：
+	if (!event) {
+		return 0;
+	}
+
+	__builtin_memset(
+	    event, 0, sizeof(*event)); // 将整块事件内存初始化为
+				       // 0；使用编译器内建的 memset，Clang
+				       // 会把它展开成 verifier 能分析的写操作。
+
+	event->kind = NETDISK_EVENT_NETWORK;  // 指定网络事件类型
+	event->network.pid = pid;	      // 拿到进程PID
+	event->network.tid = (__u32)pid_tgid; // 拿到现场TID
+	event->network.action = action; // 写入调用者传来的动作类型。
+	event->network.timestamp_ns = timestamp_ns;
+
+	// bpf_ringbuf_discard(event, 0);//暂时放弃刚申请的事件，不发送给
+	// loader；reserve 成功后必须调用 submit 或
+	// discard；当前还没有填充事件字段，所以先 discard；
+	bpf_get_current_comm(
+	    event->network.comm,
+	    sizeof(event->network)); // 调用 BPF helper，读取当前进程的名称。
+	read_sock_info(sk, &event->network.saddr, &event->network.daddr,
+		       &event->network.sport, &event->network.dport);
+
+	bpf_ringbuf_submit(event, 0);
+
+	return 0;
 }
+// 实现主动连接入口 probe。先只建立 probe、读取 PID 并执行过滤，不写 map。
+SEC("kprobe/tcp_v4_connect")
+int BPF_KPROBE(handle_tcp_v4_connect, struct sock *sk)
+{
+	__u64 pid_tgid;
+	__u32 pid;
+	struct connect_info info = {};
 
+	pid_tgid = bpf_get_current_pid_tgid();
+	pid = pid_tgid >> 32;
+
+	if (!should_trace(pid)) {
+		return 0;
+	}
+
+	info.timestamp_ns = bpf_ktime_get_ns();
+	info.sk = sk;
+
+	bpf_map_update_elem(&connect_info_map, &pid_tgid, &info, BPF_ANY);
+
+	return 0;
+}
