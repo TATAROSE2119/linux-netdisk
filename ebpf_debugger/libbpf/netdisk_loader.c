@@ -9,7 +9,7 @@
 #include <bpf/libbpf.h>
 #include <string.h>
 
-#include "include/event.h"
+#include "include/events.h"
 #include "netdisk_bpf.skel.h"
 
 static volatile sig_atomic_t exiting;

@@ -28,7 +28,7 @@ vmlinux.h:
 	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@.tmp 
 	mv $@.tmp $@
 
-netdisk_bpf.bpf.o: netdisk_bpf.bpf.c include/event.h vmlinux.h
+netdisk_bpf.bpf.o: netdisk_bpf.bpf.c include/events.h vmlinux.h
 	$(CLANG) $(BPF_CFLAGS) $(LIBBPF_CFLAGS)	\
 	-I. -Iinclude	\
 	-c $< -o $@
@@ -37,7 +37,7 @@ netdisk_bpf.skel.h: netdisk_bpf.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@.tmp
 	mv $@.tmp $@
 
-netdisk_loader: netdisk_loader.c netdisk_bpf.skel.h include/event.h
+netdisk_loader: netdisk_loader.c netdisk_bpf.skel.h include/events.h
 	$(CC) $(CFLAGS) $(LIBBPF_CFLAGS)	\
 	-I. -Iinclude	\
 	netdisk_loader.c -o $@	\
