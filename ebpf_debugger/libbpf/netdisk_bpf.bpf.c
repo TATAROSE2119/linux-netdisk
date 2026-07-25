@@ -130,24 +130,43 @@ int BPF_KPROBE(handle_tcp_v4_connect, struct sock *sk)
 	return 0;
 }
 SEC("kretprobe/tcp_v4_connect")
-int BPF_KRETPROBE(handle_tcp_v4_connect_ret,int ret){
+int BPF_KRETPROBE(handle_tcp_v4_connect_ret, int ret)
+{
 	struct connect_info *info;
 	__u64 pid_tgid;
 
-	pid_tgid=bpf_get_current_pid_tgid();
+	pid_tgid = bpf_get_current_pid_tgid();
 
-	info=bpf_map_lookup_elem(&connect_info_map,&pid_tgid);
+	info = bpf_map_lookup_elem(&connect_info_map, &pid_tgid);
 
 	if (!info) {
 		return 0;
 	}
 
+	if (ret != 0 && ret != -NETDISK_EINPROGRESS) {
+		bpf_map_delete_elem(&connect_info_map, &pid_tgid);
+		return 0;
+	}
 
+	emit_network_event(
+	    info->sk, NETDISK_NET_CONNECT,
+	    info->timestamp_ns); // 调用已经完成的统一网络事件发送函数。
 
-
-
-	
-	bpf_map_delete_elem(&connect_info_map,&pid_tgid);
+	bpf_map_delete_elem(&connect_info_map, &pid_tgid);
 
 	return 0;
+}
+SEC("kretprobe/inet_csk_accept")
+int BPF_KRETPROBE(handle_inet_csk_accept_ret, struct sock *sk)
+{
+	if (!sk) {
+		return 0;
+	}
+
+	return emit_network_event(sk, NETDISK_NET_ACCEPT, bpf_ktime_get_ns());
+}
+SEC("kprobe/tcp_close")
+int BPF_KRETPROBE(handle_tcp_close, struct sock *sk)
+{
+	return emit_network_event(sk, NETDISK_NET_CLOSE, bpf_ktime_get_ns());
 }
