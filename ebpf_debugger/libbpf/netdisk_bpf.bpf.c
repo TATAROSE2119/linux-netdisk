@@ -129,3 +129,25 @@ int BPF_KPROBE(handle_tcp_v4_connect, struct sock *sk)
 
 	return 0;
 }
+SEC("kretprobe/tcp_v4_connect")
+int BPF_KRETPROBE(handle_tcp_v4_connect_ret,int ret){
+	struct connect_info *info;
+	__u64 pid_tgid;
+
+	pid_tgid=bpf_get_current_pid_tgid();
+
+	info=bpf_map_lookup_elem(&connect_info_map,&pid_tgid);
+
+	if (!info) {
+		return 0;
+	}
+
+
+
+
+
+	
+	bpf_map_delete_elem(&connect_info_map,&pid_tgid);
+
+	return 0;
+}
