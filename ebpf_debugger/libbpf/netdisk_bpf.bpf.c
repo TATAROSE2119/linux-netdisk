@@ -77,7 +77,7 @@ static __always_inline int emit_network_event(struct sock *sk, __u8 action,
 		return 0;
 	}
 
-	event = bpf_ringbuf_reserve(&event, sizeof(*event),
+	event = bpf_ringbuf_reserve(&events, sizeof(*event),
 				    0); // 这行向 ring buffer 申请一块内存：
 	if (!event) {
 		return 0;
@@ -99,7 +99,8 @@ static __always_inline int emit_network_event(struct sock *sk, __u8 action,
 	// discard；当前还没有填充事件字段，所以先 discard；
 	bpf_get_current_comm(
 	    event->network.comm,
-	    sizeof(event->network)); // 调用 BPF helper，读取当前进程的名称。
+	    sizeof(
+		event->network.comm)); // 调用 BPF helper，读取当前进程的名称。
 	read_sock_info(sk, &event->network.saddr, &event->network.daddr,
 		       &event->network.sport, &event->network.dport);
 
@@ -166,7 +167,7 @@ int BPF_KRETPROBE(handle_inet_csk_accept_ret, struct sock *sk)
 	return emit_network_event(sk, NETDISK_NET_ACCEPT, bpf_ktime_get_ns());
 }
 SEC("kprobe/tcp_close")
-int BPF_KRETPROBE(handle_tcp_close, struct sock *sk)
+int BPF_KPROBE(handle_tcp_close, struct sock *sk)
 {
 	return emit_network_event(sk, NETDISK_NET_CLOSE, bpf_ktime_get_ns());
 }
