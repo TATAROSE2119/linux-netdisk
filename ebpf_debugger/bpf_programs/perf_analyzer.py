@@ -122,7 +122,7 @@ class PerfAnalyzer:
                 ev_type=1,  # PERF_TYPE_SOFTWARE
                 ev_config=0,  # PERF_COUNT_SW_CPU_CLOCK
                 fn_name="do_cpu_sample",
-                sample_freq=10  # 降低到10Hz采样，减少样本丢失
+                sample_freq=10,  # 降低到10Hz采样，减少样本丢失
             )
             print("[PerfAnalyzer] CPU sampling enabled")
         except Exception as e:
@@ -156,8 +156,8 @@ class PerfAnalyzer:
 
         prev_pid = event.prev_pid
         next_pid = event.next_pid
-        prev_comm = event.prev_comm.decode('utf-8', errors='replace')
-        next_comm = event.next_comm.decode('utf-8', errors='replace')
+        prev_comm = event.prev_comm.decode("utf-8", errors="replace")
+        next_comm = event.next_comm.decode("utf-8", errors="replace")
 
         # 过滤
         if not self._should_track(prev_pid) and not self._should_track(next_pid):
@@ -167,7 +167,7 @@ class PerfAnalyzer:
             prev_pid=prev_pid,
             prev_comm=prev_comm,
             next_pid=next_pid,
-            next_comm=next_comm
+            next_comm=next_comm,
         )
 
     def _handle_cpu_event(self, cpu, data, size):
@@ -176,7 +176,7 @@ class PerfAnalyzer:
 
         pid = event.pid
         cpu_id = event.cpu
-        comm = event.comm.decode('utf-8', errors='replace')
+        comm = event.comm.decode("utf-8", errors="replace")
 
         if not self._should_track(pid):
             return
@@ -186,7 +186,7 @@ class PerfAnalyzer:
             cpu=cpu_id,
             pid=pid,
             comm=comm,
-            usage=1.0  # 每次采样代表一个时间片
+            usage=1.0,  # 每次采样代表一个时间片
         )
 
     def get_cpu_time_stats(self):
@@ -203,7 +203,8 @@ class PerfAnalyzer:
 # 测试代码
 if __name__ == "__main__":
     import sys
-    sys.path.insert(0, '..')
+
+    sys.path.insert(0, "..")
     from collectors.perf import PerfCollector
 
     collector = PerfCollector()
