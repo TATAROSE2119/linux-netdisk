@@ -20,6 +20,7 @@ static volatile sig_atomic_t exiting;
 
 struct loader_options {
 	bool network;
+	bool syscall;
 	__u32 target_pid;
 };
 
@@ -38,7 +39,8 @@ static int libbpf_log(enum libbpf_print_level level, const char *format,
 
 static void usage(FILE *stream, const char *program)
 {
-	fprintf(stream, "Usage: %s --network [--pid PID]\n", program);
+	fprintf(stream, "Usage: %s (--network | --syscall) [--pid PID]\n",
+		program);
 }
 
 static int parse_pid(const char *text, __u32 *pid)
@@ -62,6 +64,7 @@ static int parse_args(int argc, char **argv, struct loader_options *options)
 {
 	static const struct option long_options[] = {
 	    {"network", no_argument, NULL, 'n'},
+	    {"syscall", no_argument, NULL, 's'},
 	    {"pid", required_argument, NULL, 'p'},
 	    {"help", no_argument, NULL, 'h'},
 	    {NULL, 0, NULL, 0},
@@ -69,11 +72,14 @@ static int parse_args(int argc, char **argv, struct loader_options *options)
 	int option;
 
 	opterr = 0;
-	while ((option = getopt_long(argc, argv, "np:h", long_options, NULL)) !=
+	while ((option = getopt_long(argc, argv, "nsp:h", long_options, NULL)) !=
 	       -1) {
 		switch (option) {
 		case 'n':
 			options->network = true;
+			break;
+		case 's':
+			options->syscall = true;
 			break;
 		case 'p':
 			if (parse_pid(optarg, &options->target_pid)) {
@@ -91,7 +97,7 @@ static int parse_args(int argc, char **argv, struct loader_options *options)
 		}
 	}
 
-	if (!options->network || optind != argc) {
+	if (options->network == options->syscall || optind != argc) {
 		usage(stderr, argv[0]);
 		return -EINVAL;
 	}
@@ -102,27 +108,59 @@ static int parse_args(int argc, char **argv, struct loader_options *options)
 static int configure_programs(struct netdisk_bpf_bpf *skel,
 			      const struct loader_options *options)
 {
+	struct bpf_program *network_programs[] = {
+	    skel->progs.handle_tcp_v4_connect,
+	    skel->progs.handle_tcp_v4_connect_ret,
+	    skel->progs.handle_inet_csk_accept_ret,
+	    skel->progs.handle_tcp_close,
+	    skel->progs.handle_tcp_sendmsg,
+	    skel->progs.handle_tcp_sendmsg_ret,
+	    skel->progs.handle_tcp_recvmsg,
+	    skel->progs.handle_tcp_recvmsg_ret,
+	};
+	struct bpf_program *syscall_programs[] = {
+	    skel->progs.handle_sys_enter_read,
+	    skel->progs.handle_sys_exit_read,
+	    skel->progs.handle_sys_enter_write,
+	    skel->progs.handle_sys_exit_write,
+	    skel->progs.handle_sys_enter_openat,
+	    skel->progs.handle_sys_exit_openat,
+	    skel->progs.handle_sys_enter_close,
+	    skel->progs.handle_sys_exit_close,
+	    skel->progs.handle_sys_enter_accept4,
+	    skel->progs.handle_sys_exit_accept4,
+	    skel->progs.handle_sys_enter_sendto,
+	    skel->progs.handle_sys_exit_sendto,
+	    skel->progs.handle_sys_enter_recvfrom,
+	    skel->progs.handle_sys_exit_recvfrom,
+	};
+	struct bpf_program **selected_programs;
+	struct bpf_program *program;
+	size_t selected_program_count;
+	size_t index;
 	int err;
 
-	err = bpf_program__set_autoload(skel->progs.handle_tcp_v4_connect,
-					options->network);
-	if (err)
-		return err;
+	bpf_object__for_each_program(program, skel->obj) {
+		err = bpf_program__set_autoload(program, false);
+		if (err)
+			return err;
+	}
 
-	err = bpf_program__set_autoload(skel->progs.handle_tcp_v4_connect_ret,
-					options->network);
-	if (err)
-		return err;
+	if (options->network) {
+		selected_programs = network_programs;
+		selected_program_count = sizeof(network_programs) /
+					 sizeof(network_programs[0]);
+	} else {
+		selected_programs = syscall_programs;
+		selected_program_count = sizeof(syscall_programs) /
+					 sizeof(syscall_programs[0]);
+	}
 
-	err = bpf_program__set_autoload(skel->progs.handle_inet_csk_accept_ret,
-					options->network);
-	if (err)
-		return err;
-
-	err = bpf_program__set_autoload(skel->progs.handle_tcp_close,
-					options->network);
-	if (err)
-		return err;
+	for (index = 0; index < selected_program_count; index++) {
+		err = bpf_program__set_autoload(selected_programs[index], true);
+		if (err)
+			return err;
+	}
 
 	skel->rodata->target_pid = options->target_pid;
 	return 0;
@@ -169,28 +207,33 @@ static void print_json_string(const char *text, size_t max_length)
 	fputc('"', stdout);
 }
 
-static int handle_event(void *ctx, void *data, size_t data_sz)
+static const char *syscall_name(__u8 syscall_id)
 {
-	const struct netdisk_event *event = data;
-	const struct netdisk_network_event *network;
+	switch (syscall_id) {
+	case NETDISK_SYSCALL_READ:
+		return "read";
+	case NETDISK_SYSCALL_WRITE:
+		return "write";
+	case NETDISK_SYSCALL_OPENAT:
+		return "openat";
+	case NETDISK_SYSCALL_CLOSE:
+		return "close";
+	case NETDISK_SYSCALL_ACCEPT4:
+		return "accept4";
+	case NETDISK_SYSCALL_SENDTO:
+		return "sendto";
+	case NETDISK_SYSCALL_RECVFROM:
+		return "recvfrom";
+	default:
+		return NULL;
+	}
+}
+
+static int handle_network_event(const struct netdisk_network_event *network)
+{
 	char source_address[INET_ADDRSTRLEN];
 	char destination_address[INET_ADDRSTRLEN];
 
-	(void)ctx;
-
-	if (!data || data_sz != sizeof(*event)) {
-		fprintf(stderr,
-			"invalid event size: got %zu bytes, expected %zu\n",
-			data_sz, sizeof(*event));
-		return 0;
-	}
-
-	if (event->kind != NETDISK_EVENT_NETWORK) {
-		fprintf(stderr, "unsupported event kind: %u\n", event->kind);
-		return 0;
-	}
-
-	network = &event->network;
 	if (network->action < NETDISK_NET_CONNECT ||
 	    network->action > NETDISK_NET_RECV) {
 		fprintf(stderr, "invalid network action: %u\n",
@@ -222,6 +265,54 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 	fflush(stdout);
 
 	return 0;
+}
+
+static int handle_syscall_event(const struct netdisk_syscall_event *syscall)
+{
+	const char *name;
+
+	name = syscall_name(syscall->syscall_id);
+	if (!name) {
+		fprintf(stderr, "invalid syscall id: %u\n",
+			(unsigned int)syscall->syscall_id);
+		return 0;
+	}
+
+	fprintf(stdout,
+		"{\"type\":\"syscall\",\"pid\":%u,\"tid\":%u,\"comm\":",
+		syscall->pid, syscall->tid);
+	print_json_string(syscall->comm, sizeof(syscall->comm));
+	fprintf(stdout,
+		",\"syscall\":\"%s\",\"duration_ns\":%" PRIu64
+		",\"ret\":%" PRId64 ",\"timestamp_ns\":%" PRIu64 "}\n",
+		name, (uint64_t)syscall->duration_ns, (int64_t)syscall->ret,
+		(uint64_t)syscall->timestamp_ns);
+	fflush(stdout);
+	return 0;
+}
+
+static int handle_event(void *ctx, void *data, size_t data_sz)
+{
+	const struct netdisk_event *event = data;
+
+	(void)ctx;
+
+	if (!data || data_sz != sizeof(*event)) {
+		fprintf(stderr,
+			"invalid event size: got %zu bytes, expected %zu\n",
+			data_sz, sizeof(*event));
+		return 0;
+	}
+
+	switch (event->kind) {
+	case NETDISK_EVENT_NETWORK:
+		return handle_network_event(&event->network);
+	case NETDISK_EVENT_SYSCALL:
+		return handle_syscall_event(&event->syscall);
+	default:
+		fprintf(stderr, "unsupported event kind: %u\n", event->kind);
+		return 0;
+	}
 }
 
 int main(int argc, char **argv)
@@ -275,9 +366,9 @@ int main(int argc, char **argv)
 	}
 
 	fprintf(stderr,
-		"netdisk loader started in network mode (PID filter: %u); "
+		"netdisk loader started in %s mode (PID filter: %u); "
 		"press Ctrl+C to stop\n",
-		options.target_pid);
+		options.network ? "network" : "syscall", options.target_pid);
 
 	while (!exiting) {
 		err = ring_buffer__poll(ringbuf, 100);

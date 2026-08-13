@@ -8,6 +8,7 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <ctype.h> // For isspace()
+#include <errno.h>
 #include <sys/time.h>  // 为了使用 gettimeofday 计算速度
 #include <time.h> // For localtime, strftime
 #include <libgen.h> // 为了使用basename函数
@@ -498,12 +499,82 @@ void show_progress(const char* filename, const char* type, long transferred, lon
     fflush(stdout); // 立即刷新输出
 }
 
+static int send_all(int socket_fd, const void *buffer, size_t length) {
+    const unsigned char *position = buffer;
+
+    while (length > 0) {
+        ssize_t bytes_sent;
+
+#ifdef MSG_NOSIGNAL
+        bytes_sent = send(socket_fd, position, length, MSG_NOSIGNAL);
+#else
+        bytes_sent = send(socket_fd, position, length, 0);
+#endif
+        if (bytes_sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (bytes_sent == 0) {
+            errno = EPIPE;
+            return -1;
+        }
+        position += bytes_sent;
+        length -= (size_t)bytes_sent;
+    }
+    return 0;
+}
+
+static int receive_all(int socket_fd, void *buffer, size_t length) {
+    unsigned char *position = buffer;
+
+    while (length > 0) {
+        ssize_t bytes_received = recv(socket_fd, position, length, 0);
+
+        if (bytes_received == 0) {
+            errno = ECONNRESET;
+            return -1;
+        }
+        if (bytes_received < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        position += bytes_received;
+        length -= (size_t)bytes_received;
+    }
+    return 0;
+}
+
+static int send_upload_field(int socket_fd, const char *value) {
+    size_t length = strlen(value);
+    uint32_t network_length;
+
+    if (length > UINT32_MAX) {
+        errno = EMSGSIZE;
+        return -1;
+    }
+
+    network_length = htonl((uint32_t)length);
+    if (send_all(socket_fd, &network_length, sizeof(network_length)) != 0) {
+        return -1;
+    }
+    return send_all(socket_fd, value, length);
+}
+
 void upload_file(const char *filepath, const char *target_dir) {
     int sockfd = connect_to_server();
     if (sockfd < 0) return;
 
     // 从完整路径中提取文件名 (basename)
     char *filepath_copy = strdup(filepath);
+    if (filepath_copy == NULL) {
+        perror("无法准备上传路径");
+        close(sockfd);
+        return;
+    }
     const char *filename = basename(filepath_copy);
 
     FILE *fp = fopen(filepath, "rb");
@@ -515,35 +586,43 @@ void upload_file(const char *filepath, const char *target_dir) {
     }
 
     // 获取文件大小
-    fseek(fp, 0, SEEK_END);
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        perror("无法读取上传文件大小");
+        fclose(fp);
+        free(filepath_copy);
+        close(sockfd);
+        return;
+    }
     long file_size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    long uploaded_size = 0;
+    if (file_size < 0 || fseek(fp, 0, SEEK_SET) != 0) {
+        perror("无法读取上传文件大小");
+        fclose(fp);
+        free(filepath_copy);
+        close(sockfd);
+        return;
+    }
+    uint64_t file_size_64 = (uint64_t)file_size;
+    uint64_t uploaded_size = 0;
+    int progress_started = 0;
 
     // 发送命令和文件信息
     char cmd = 'U';
-    write(sockfd, &cmd, sizeof(cmd));
-
-    // 发送用户名
-    int ulen = strlen(g_username);
-    int ulen_net = htonl(ulen);
-    write(sockfd, &ulen_net, sizeof(ulen_net));
-    write(sockfd, g_username, ulen);
-
-    // 发送目标目录
     const char *dir_to_send = target_dir ? target_dir : "";
-    int dir_len = strlen(dir_to_send);
-    int dir_len_net = htonl(dir_len);
-    write(sockfd, &dir_len_net, sizeof(dir_len_net));
-    if (dir_len > 0) {
-        write(sockfd, dir_to_send, dir_len);
-    }
+    uint32_t size_high_net = htonl((uint32_t)(file_size_64 >> 32));
+    uint32_t size_low_net = htonl((uint32_t)(file_size_64 & UINT32_MAX));
 
-    // 发送文件名
-    int name_len = strlen(filename);
-    int name_len_net = htonl(name_len);
-    write(sockfd, &name_len_net, sizeof(name_len_net));
-    write(sockfd, filename, name_len);
+    if (send_all(sockfd, &cmd, sizeof(cmd)) != 0 ||
+        send_upload_field(sockfd, g_username) != 0 ||
+        send_upload_field(sockfd, dir_to_send) != 0 ||
+        send_upload_field(sockfd, filename) != 0 ||
+        send_all(sockfd, &size_high_net, sizeof(size_high_net)) != 0 ||
+        send_all(sockfd, &size_low_net, sizeof(size_low_net)) != 0) {
+        perror("上传请求发送失败");
+        fclose(fp);
+        free(filepath_copy);
+        close(sockfd);
+        return;
+    }
 
     // 用于计算速度
     struct timeval start, now;
@@ -553,10 +632,15 @@ void upload_file(const char *filepath, const char *target_dir) {
     char buffer[4096];
     size_t n;
     while ((n = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
-        if (write(sockfd, buffer, n) < 0) {
-            printf("\n"); // 错误时换行
-            perror("Socket write error");
-            break;
+        if (send_all(sockfd, buffer, n) != 0) {
+            if (progress_started) {
+                printf("\n");
+            }
+            perror("文件内容发送失败");
+            fclose(fp);
+            free(filepath_copy);
+            close(sockfd);
+            return;
         }
         uploaded_size += n;
         
@@ -564,16 +648,47 @@ void upload_file(const char *filepath, const char *target_dir) {
         gettimeofday(&now, NULL);
         double time_spent = (now.tv_sec - start.tv_sec) + 
                           (now.tv_usec - start.tv_usec) / 1000000.0;
-        double speed = uploaded_size / time_spent;
+        double speed = time_spent > 0 ? uploaded_size / time_spent : 0;
         
-        show_progress(filename, "上传", uploaded_size, file_size, speed);
+        show_progress(filename, "上传", (long)uploaded_size, file_size, speed);
+        progress_started = 1;
     }
 
-    printf("\n"); // 只在完成时换行
+    if (ferror(fp)) {
+        if (progress_started) {
+            printf("\n");
+        }
+        perror("读取上传文件失败");
+        fclose(fp);
+        free(filepath_copy);
+        close(sockfd);
+        return;
+    }
+
+    char response;
+    if (receive_all(sockfd, &response, sizeof(response)) != 0) {
+        if (progress_started) {
+            printf("\n");
+        }
+        perror("未收到服务端上传结果");
+        fclose(fp);
+        free(filepath_copy);
+        close(sockfd);
+        return;
+    }
+
+    if (progress_started) {
+        printf("\n");
+    }
+    if (response == 1) {
+        printf("✅ 文件 '%s' 上传完成\n", filename);
+    } else {
+        printf("❌ 文件 '%s' 上传失败：服务端未完整接收文件\n", filename);
+    }
+
     fclose(fp);
     free(filepath_copy);
     close(sockfd);
-    printf("✅ 文件 '%s' 上传完成\n", filename);
 }
 
 void download_file(const char *filename) {

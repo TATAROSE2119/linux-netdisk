@@ -1,6 +1,6 @@
 CLANG?=clang
 CC?=gcc
-BPFTOOL?=bpftool
+BPFTOOL?=/home/tatarose/WSL2-Linux-Kernel/tools/bpf/bpftool/bpftool
 PKG_CONFIG?=pkg-config
 
 ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' \
