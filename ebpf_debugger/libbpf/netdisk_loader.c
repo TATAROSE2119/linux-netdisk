@@ -43,7 +43,21 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 	event = data;
 	// 任务1，3.。。
 
-	fprintf(stderr, "received unsupported event kind: %u\n ", event->kind);
+	// fprintf(stderr, "received unsupported event kind: %u\n ",
+	// event->kind);
+
+	if (event->kind != NETDISK_EVENT_NETWORK) {
+		fprintf(stderr, "unsupported event kind: %u\n", event->kind);
+		return 0;
+	}
+
+	const struct netdisk_network_event *network = &event->network;
+
+	fprintf(stderr,
+		"network action=%u pid=%u comm=%.*s sport=%u dport=%u\n",
+		network->action, network->pid, 16, network->comm,
+		network->sport, network->dport);
+
 	return 0;
 }
 
