@@ -7,7 +7,7 @@ CLIENT_LDFLAGS = -L/opt/homebrew/lib -lreadline
 # 目标文件
 SERVER = server/server
 CLIENT = client/client
-SERVER_OBJS = server/main.o server/thread_pool.o
+SERVER_OBJS = server/main.o server/thread_pool/thread_pool.o
 CLIENT_OBJS = client/main.o
 
 # 默认目标
@@ -25,7 +25,7 @@ $(CLIENT): $(CLIENT_OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-server/main.o server/thread_pool.o: server/thread_pool.h
+server/main.o server/thread_pool.o: server/thread_pool/thread_pool.h
 
 # 调试版本
 debug: CFLAGS += -g -DDEBUG
