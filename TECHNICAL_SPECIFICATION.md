@@ -48,8 +48,8 @@ Linux Kernel + C Server / Client Process
 
 | 组件 | 入口文件 | 技术栈 | 作用 |
 |---|---|---|---|
-| C Server | `server/main.c` | C、POSIX Socket、pthread、SQLite、OpenSSL SHA-256 | 用户认证、文件上传下载、目录操作、目录树、协议处理 |
-| CLI Client | `client/main.c` | C、Readline、POSIX Socket | 命令行交互、自动补全、上传下载进度显示 |
+| C Server | `server/src/main.c` | C、POSIX Socket、pthread、SQLite、OpenSSL SHA-256 | 用户认证、文件上传下载、目录操作、目录树、协议处理 |
+| CLI Client | `client/src/main.c` | C、Readline、POSIX Socket | 命令行交互、自动补全、上传下载进度显示 |
 | Web Bridge | `gui_examples/app.py` | Flask、Flask-CORS、Python socket | REST API、静态资源服务、HTTP 到 TCP 协议转换 |
 | Web Frontend | `gui_examples/js/*.js` | HTML、CSS、ES6、Fetch API | 登录状态、文件列表、上传队列、批量下载、国际化 |
 | eBPF Debugger | `ebpf_debugger/app.py` | Flask-SocketIO、BCC、psutil | 网络、系统调用、性能、用户态函数追踪 |
@@ -61,7 +61,7 @@ C Server 是项目的核心数据面，监听 `0.0.0.0:9000`，每个 TCP 连接
 
 ### 2.1 服务启动与监听模型
 
-`server/main.c` 的 `main()` 完成以下动作：
+`server/src/main.c` 的 `main()` 完成以下动作：
 
 1. 打开或创建 SQLite 数据库 `netdisk.db`。
 2. 执行建表语句，确保用户表存在。
@@ -404,7 +404,7 @@ Web 侧：
 
 ## 3. CLI Client 实现
 
-CLI Client 是一套直接访问 C Server 的命令行客户端，文件位于 `client/main.c`。
+CLI Client 是一套直接访问 C Server 的命令行客户端，文件位于 `client/src/main.c`。
 
 ### 3.1 交互式 Shell 与 Readline
 
@@ -1002,10 +1002,10 @@ monitor_loop()
 链接关系：
 
 ```text
-server/main.c -> server/server
+server/src/main.c -> server/server
   libs: sqlite3, ssl, crypto, pthread
 
-client/main.c -> client/client
+client/src/main.c -> client/client
   libs: readline
 ```
 
@@ -1308,8 +1308,8 @@ filename.part -> 校验成功 -> rename(filename)
 
 | 文件 | 说明 |
 |---|---|
-| `server/main.c` | C Server 主实现，包含协议处理、认证、文件操作、目录树、线程模型 |
-| `client/main.c` | CLI Client，包含 Readline、命令解析、补全、上传下载 |
+| `server/src/main.c` | C Server 主实现，包含协议处理、认证、文件操作、目录树、线程模型 |
+| `client/src/main.c` | CLI Client，包含 Readline、命令解析、补全、上传下载 |
 | `gui_examples/app.py` | Flask Web Bridge 入口 |
 | `gui_examples/api/c_server_client.py` | Python 到 C Server 的协议封装 |
 | `gui_examples/api/auth_routes.py` | 登录注册 API |

@@ -14,6 +14,8 @@
 #include <libgen.h> // 为了使用basename函数
 #include <stdint.h> // For uint32_t, int64_t
 
+#include "net_io.h"
+
 // 跨平台的字节序转换函数
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
@@ -499,54 +501,6 @@ void show_progress(const char* filename, const char* type, long transferred, lon
     fflush(stdout); // 立即刷新输出
 }
 
-static int send_all(int socket_fd, const void *buffer, size_t length) {
-    const unsigned char *position = buffer;
-
-    while (length > 0) {
-        ssize_t bytes_sent;
-
-#ifdef MSG_NOSIGNAL
-        bytes_sent = send(socket_fd, position, length, MSG_NOSIGNAL);
-#else
-        bytes_sent = send(socket_fd, position, length, 0);
-#endif
-        if (bytes_sent < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        if (bytes_sent == 0) {
-            errno = EPIPE;
-            return -1;
-        }
-        position += bytes_sent;
-        length -= (size_t)bytes_sent;
-    }
-    return 0;
-}
-
-static int receive_all(int socket_fd, void *buffer, size_t length) {
-    unsigned char *position = buffer;
-
-    while (length > 0) {
-        ssize_t bytes_received = recv(socket_fd, position, length, 0);
-
-        if (bytes_received == 0) {
-            errno = ECONNRESET;
-            return -1;
-        }
-        if (bytes_received < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        position += bytes_received;
-        length -= (size_t)bytes_received;
-    }
-    return 0;
-}
 
 static int send_upload_field(int socket_fd, const char *value) {
     size_t length = strlen(value);
@@ -1123,7 +1077,7 @@ int connect_to_server() {
 }
 
 
-int main() {
+int main(void) {
     rl_attempted_completion_function = command_completion;
     char prompt[1024];
     char* line;

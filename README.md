@@ -167,8 +167,16 @@ ngrok http 8080
 
 ```
 linux-netdisk/
-├── server/main.c           # C 服务器 (945行)
-├── client/main.c           # C 客户端 (1246行)
+├── client/
+│   ├── include/            # 客户端头文件（待拆分）
+│   └── src/main.c          # C 客户端入口
+├── common/
+│   ├── include/            # 客户端/服务器共享头文件（待拆分）
+│   └── src/                # 客户端/服务器共享实现（待拆分）
+├── server/
+│   ├── include/            # 服务器头文件
+│   ├── src/                # C 服务器源码
+│   └── tests/              # 服务器测试
 ├── gui_examples/
 │   ├── app.py              # Flask 主应用
 │   ├── api/                # API 模块

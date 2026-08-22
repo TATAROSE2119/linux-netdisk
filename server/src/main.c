@@ -26,7 +26,8 @@
 #include <stdint.h>
 #include <sys/time.h>
 
-#include <netdisk/server/thread_pool.h>
+#include "thread_pool.h"
+#include "net_io.h"
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
 #define htobe64(x) OSSwapHostToBigInt64(x)
@@ -279,82 +280,13 @@ static int remove_tree(const char *path) {
 
 void sha256_string(const char *str, char *out_hex);
 
-static int read_full(int fd, void *buffer, size_t length) {
-    unsigned char *position = buffer;
 
-    while (length > 0) {
-        ssize_t bytes_read = read(fd, position, length);
 
-        if (bytes_read == 0) {
-            errno = ECONNRESET;
-            return -1;
-        }
-        if (bytes_read < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        position += bytes_read;
-        length -= (size_t)bytes_read;
-    }
-    return 0;
-}
 
-static int write_full(int fd, const void *buffer, size_t length) {
-    const unsigned char *position = buffer;
-
-    while (length > 0) {
-        ssize_t bytes_written = write(fd, position, length);
-
-        if (bytes_written < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        if (bytes_written == 0) {
-            errno = EPIPE;
-            return -1;
-        }
-        position += bytes_written;
-        length -= (size_t)bytes_written;
-    }
-    return 0;
-}
-
-static int read_u32(int fd, uint32_t *value) {
-    uint32_t network_value;
-
-    if (read_full(fd, &network_value, sizeof(network_value)) != 0) {
-        return -1;
-    }
-    *value = ntohl(network_value);
-    return 0;
-}
-
-static int read_string(int fd, char *buffer, size_t buffer_size,
-                       size_t maximum_length) {
-    uint32_t length;
-
-    if (buffer_size == 0 || maximum_length >= buffer_size ||
-        read_u32(fd, &length) != 0) {
-        return -1;
-    }
-    if (length > maximum_length) {
-        errno = EMSGSIZE;
-        return -1;
-    }
-    if (read_full(fd, buffer, length) != 0) {
-        return -1;
-    }
-    buffer[length] = '\0';
-    return 0;
-}
 
 #define READ_STRING_OR_CLEANUP(fd, buffer, maximum_length)                    \
     do {                                                                      \
-        if (read_string((fd), (buffer), sizeof(buffer),                       \
+        if (net_read_string((fd), (buffer), sizeof(buffer),                       \
                         (maximum_length)) != 0) {                             \
             goto cleanup;                                                     \
         }                                                                     \
@@ -362,7 +294,7 @@ static int read_string(int fd, char *buffer, size_t buffer_size,
 
 #define WRITE_OR_CLEANUP(fd, buffer, length)                                  \
     do {                                                                      \
-        if (write_full((fd), (buffer), (length)) != 0) {                      \
+        if (net_write_full((fd), (buffer), (length)) != 0) {                      \
             goto cleanup;                                                     \
         }                                                                     \
     } while (0)
@@ -384,7 +316,7 @@ void handle_client(int conn_fd) {
     sqlite3_busy_timeout(db, 5000);
     //简单菜单：先收指令
     char cmd;
-    if (read_full(conn_fd, &cmd, sizeof(cmd)) != 0) {
+    if (net_read_full(conn_fd, &cmd, sizeof(cmd)) != 0) {
         goto cleanup;
     }
 
@@ -461,8 +393,8 @@ void handle_client(int conn_fd) {
         READ_STRING_OR_CLEANUP(conn_fd, filename, MAX_FILENAME_LENGTH);
 
         uint32_t size_high_net, size_low_net;
-        if (read_full(conn_fd, &size_high_net, sizeof(size_high_net)) != 0 ||
-            read_full(conn_fd, &size_low_net, sizeof(size_low_net)) != 0) {
+        if (net_read_full(conn_fd, &size_high_net, sizeof(size_high_net)) != 0 ||
+            net_read_full(conn_fd, &size_low_net, sizeof(size_low_net)) != 0) {
             goto cleanup;
         }
 
@@ -581,7 +513,7 @@ void handle_client(int conn_fd) {
             perror("File not found❌");
             goto cleanup;
         }
-        if (write_full(conn_fd, &flag, sizeof(flag)) != 0) {
+        if (net_write_full(conn_fd, &flag, sizeof(flag)) != 0) {
             fclose(fp);
             goto cleanup;
         }
@@ -596,8 +528,8 @@ void handle_client(int conn_fd) {
         uint32_t size_low = file_size & 0xFFFFFFFF;
         size_high = htonl(size_high);
         size_low = htonl(size_low);
-        if (write_full(conn_fd, &size_high, sizeof(size_high)) != 0 ||
-            write_full(conn_fd, &size_low, sizeof(size_low)) != 0) {
+        if (net_write_full(conn_fd, &size_high, sizeof(size_high)) != 0 ||
+            net_write_full(conn_fd, &size_low, sizeof(size_low)) != 0) {
             fclose(fp);
             goto cleanup;
         }
@@ -606,7 +538,7 @@ void handle_client(int conn_fd) {
         char buffer[4096];
         size_t n;
         while((n = fread(buffer, sizeof(char), sizeof(buffer), fp)) > 0) {
-            if (write_full(conn_fd, buffer, n) != 0) {
+            if (net_write_full(conn_fd, buffer, n) != 0) {
                 fclose(fp);
                 goto cleanup;
             }
@@ -634,7 +566,7 @@ void handle_client(int conn_fd) {
             goto cleanup;
         }
         char res = 1;
-        if (write_full(conn_fd, &res, sizeof(res)) != 0) {
+        if (net_write_full(conn_fd, &res, sizeof(res)) != 0) {
             closedir(dir);
             goto cleanup;
         }
@@ -646,7 +578,7 @@ void handle_client(int conn_fd) {
         }
         rewinddir(dir);
         int file_count_net = htonl(file_count);
-        if (write_full(conn_fd, &file_count_net, sizeof(file_count_net)) != 0) {
+        if (net_write_full(conn_fd, &file_count_net, sizeof(file_count_net)) != 0) {
             closedir(dir);
             goto cleanup;
         }
@@ -664,23 +596,23 @@ void handle_client(int conn_fd) {
                     // 发送文件名长度和文件名
                     int name_len = strlen(entry->d_name);
                     int name_len_net = htonl(name_len);
-                    if (write_full(conn_fd, &name_len_net,
+                    if (net_write_full(conn_fd, &name_len_net,
                                    sizeof(name_len_net)) != 0 ||
-                        write_full(conn_fd, entry->d_name, name_len) != 0) {
+                        net_write_full(conn_fd, entry->d_name, name_len) != 0) {
                         closedir(dir);
                         goto cleanup;
                     }
 
                     // 发送文件大小
                     int64_t size_net = htobe64(file_stat.st_size);
-                    if (write_full(conn_fd, &size_net, sizeof(size_net)) != 0) {
+                    if (net_write_full(conn_fd, &size_net, sizeof(size_net)) != 0) {
                         closedir(dir);
                         goto cleanup;
                     }
 
                     // 发送文件修改时间
                     int64_t mtime_net = htobe64(file_stat.st_mtime);
-                    if (write_full(conn_fd, &mtime_net, sizeof(mtime_net)) != 0) {
+                    if (net_write_full(conn_fd, &mtime_net, sizeof(mtime_net)) != 0) {
                         closedir(dir);
                         goto cleanup;
                     }
@@ -805,7 +737,7 @@ void handle_client(int conn_fd) {
                 if(stat(full_path, &st) == 0) {
                     // 发送项目类型（文件=1，目录=2）
                     char type = S_ISDIR(st.st_mode) ? 2 : 1;
-                    if (write_full(conn_fd, &type, sizeof(type)) != 0) {
+                    if (net_write_full(conn_fd, &type, sizeof(type)) != 0) {
                         closedir(dir);
                         goto cleanup;
                     }
@@ -813,9 +745,9 @@ void handle_client(int conn_fd) {
                     // 发送名称长度和名称
                     int name_len = strlen(entry->d_name);
                     int name_len_net = htonl(name_len);
-                    if (write_full(conn_fd, &name_len_net,
+                    if (net_write_full(conn_fd, &name_len_net,
                                    sizeof(name_len_net)) != 0 ||
-                        write_full(conn_fd, entry->d_name, name_len) != 0) {
+                        net_write_full(conn_fd, entry->d_name, name_len) != 0) {
                         closedir(dir);
                         goto cleanup;
                     }
@@ -823,7 +755,7 @@ void handle_client(int conn_fd) {
                     // 发送深度（这里都是第一层，为1）
                     int depth = 1;
                     int depth_net = htonl(depth);
-                    if (write_full(conn_fd, &depth_net,
+                    if (net_write_full(conn_fd, &depth_net,
                                    sizeof(depth_net)) != 0) {
                         closedir(dir);
                         goto cleanup;
@@ -864,7 +796,7 @@ void handle_client(int conn_fd) {
             goto cleanup;
         }
         char res = 1;
-        if (write_full(conn_fd, &res, sizeof(res)) != 0) {
+        if (net_write_full(conn_fd, &res, sizeof(res)) != 0) {
             closedir(dir);
             goto cleanup;
         }
@@ -881,7 +813,7 @@ void handle_client(int conn_fd) {
 
         // 发送条目数量
         int count_net = htonl(count);
-        if (write_full(conn_fd, &count_net, sizeof(count_net)) != 0) {
+        if (net_write_full(conn_fd, &count_net, sizeof(count_net)) != 0) {
             closedir(dir);
             goto cleanup;
         }
@@ -903,7 +835,7 @@ void handle_client(int conn_fd) {
                 // 发送类型（1=文件，2=目录）- 使用4字节整数
                 uint32_t type = S_ISDIR(st.st_mode) ? 2 : 1;
                 uint32_t type_net = htonl(type);
-                if (write_full(conn_fd, &type_net, sizeof(type_net)) != 0) {
+                if (net_write_full(conn_fd, &type_net, sizeof(type_net)) != 0) {
                     closedir(dir);
                     goto cleanup;
                 }
@@ -911,23 +843,23 @@ void handle_client(int conn_fd) {
                 // 发送名称
                 int name_len = strlen(entry->d_name);
                 int name_len_net = htonl(name_len);
-                if (write_full(conn_fd, &name_len_net,
+                if (net_write_full(conn_fd, &name_len_net,
                                sizeof(name_len_net)) != 0 ||
-                    write_full(conn_fd, entry->d_name, name_len) != 0) {
+                    net_write_full(conn_fd, entry->d_name, name_len) != 0) {
                     closedir(dir);
                     goto cleanup;
                 }
 
                 // 发送大小
                 int64_t size_net = htobe64(st.st_size);
-                if (write_full(conn_fd, &size_net, sizeof(size_net)) != 0) {
+                if (net_write_full(conn_fd, &size_net, sizeof(size_net)) != 0) {
                     closedir(dir);
                     goto cleanup;
                 }
 
                 // 发送修改时间
                 int64_t mtime_net = htobe64(st.st_mtime);
-                if (write_full(conn_fd, &mtime_net, sizeof(mtime_net)) != 0) {
+                if (net_write_full(conn_fd, &mtime_net, sizeof(mtime_net)) != 0) {
                     closedir(dir);
                     goto cleanup;
                 }
@@ -1052,21 +984,21 @@ void send_directory_tree(int conn_fd, const char* dir_path, int depth) {
             struct stat st;
         if (stat(full_path, &st) == 0) {
             char type = S_ISDIR(st.st_mode) ? 2 : 1; // 2=目录, 1=文件
-            if (write_full(conn_fd, &type, sizeof(type)) != 0) {
+            if (net_write_full(conn_fd, &type, sizeof(type)) != 0) {
                 break;
             }
 
             // 发送文件名
             int name_len = strlen(entry->d_name);
             int name_len_net = htonl(name_len);
-            if (write_full(conn_fd, &name_len_net, sizeof(name_len_net)) != 0 ||
-                write_full(conn_fd, entry->d_name, name_len) != 0) {
+            if (net_write_full(conn_fd, &name_len_net, sizeof(name_len_net)) != 0 ||
+                net_write_full(conn_fd, entry->d_name, name_len) != 0) {
                 break;
             }
 
             // 发送深度
             int depth_net = htonl(depth);
-            if (write_full(conn_fd, &depth_net, sizeof(depth_net)) != 0) {
+            if (net_write_full(conn_fd, &depth_net, sizeof(depth_net)) != 0) {
                 break;
             }
 

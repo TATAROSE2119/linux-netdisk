@@ -1,5 +1,5 @@
-#ifndef NETDISK_THREAD_POOL_H
-#define NETDISK_THREAD_POOL_H
+#ifndef NETDISK_SERVER_THREAD_POOL_H
+#define NETDISK_SERVER_THREAD_POOL_H
 
 #include <stddef.h>
 
@@ -26,4 +26,4 @@ void thread_pool_shutdown(struct thread_pool *pool);
 /* Shutdown if necessary and release all pool resources. */
 void thread_pool_destroy(struct thread_pool *pool);
 
-#endif
+#endif /* NETDISK_SERVER_THREAD_POOL_H */
