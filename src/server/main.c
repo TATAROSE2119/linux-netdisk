@@ -26,7 +26,7 @@
 #include <stdint.h>
 #include <sys/time.h>
 
-#include "thread_pool.h"
+#include <netdisk/server/thread_pool.h>
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
 #define htobe64(x) OSSwapHostToBigInt64(x)

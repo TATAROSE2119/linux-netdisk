@@ -14,7 +14,7 @@
 client/client
 server/server
 compile_commands.json
-
+build/
 # Python
 __pycache__/
 *.pyc

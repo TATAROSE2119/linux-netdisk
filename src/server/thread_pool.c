@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 
-#include "thread_pool.h"
+#include <netdisk/server/thread_pool.h>
 
 #include <errno.h>
 #include <pthread.h>

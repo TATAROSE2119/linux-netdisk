@@ -69,7 +69,7 @@ compile_project() {
     
     if [ ! -f "server/server" ] || [ ! -f "client/client" ]; then
         make clean && bear -- make
-        if [ $? -ne 0 ]; then
+        if ! make; then
             log_error "编译失败"
             exit 1
         fi
