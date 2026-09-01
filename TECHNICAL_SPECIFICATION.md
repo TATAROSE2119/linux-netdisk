@@ -68,27 +68,29 @@ C Server 是项目的核心数据面，监听 `0.0.0.0:9000`，每个 TCP 连接
 3. 创建 TCP socket。
 4. 绑定端口 `9000`。
 5. 调用 `listen()` 进入监听状态。
-6. 在无限循环中 `accept()` 新连接。
-7. 每个连接分配一个独立 `pthread` 执行 `handle_client()`。
-8. 线程被 `pthread_detach()`，避免主线程回收 join。
+6. 创建 epoll 实例并注册非阻塞监听 socket。
+7. 新连接先作为 pending socket 注册到 epoll，不立即占用工作线程。
+8. pending socket 首次可读后从 epoll 删除，恢复阻塞模式并提交有界线程池。
+9. 工作线程执行 `handle_client()`，处理完成后统一关闭连接。
 
 关键点：
 
-- 主线程只负责接收连接，不做业务处理。
-- 每个连接在独立线程中完成，避免单个上传、下载或目录遍历阻塞其他请求。
+- 主线程运行 epoll Reactor，负责 accept、pending 连接超时和任务分派。
+- 固定大小工作池限制业务并发，线程数量不会随空闲连接线性增长。
+- 只建立连接但尚未发送命令的客户端停留在 epoll 中，不占用 worker。
 - 每个线程内部独立打开 SQLite 连接，降低跨线程共享数据库句柄的复杂度。
 
 线程模型：
 
 ```text
-main thread
+main thread / epoll Reactor
   |
-  +-- accept conn A -> pthread(handle_client)
-  +-- accept conn B -> pthread(handle_client)
-  +-- accept conn C -> pthread(handle_client)
+  +-- idle conn A --------> epoll pending
+  +-- readable conn B ----> bounded FIFO ----> worker(handle_client)
+  +-- readable conn C ----> bounded FIFO ----> worker(handle_client)
 ```
 
-这种模型实现简单，适合轻量级局域网网盘。它的代价是线程数量会随并发连接线性增长，面对大量连接时需要连接池、事件驱动或线程池优化。
+当前实现属于“epoll 接入层 + 阻塞业务工作池”。它解决了空闲连接占用 worker 的问题，但已经开始发送请求的慢客户端仍可能占用工作线程。全非阻塞协议状态机的后续路线见 `EPOLL_REFACTOR_GUIDE.md`。
 
 ### 2.2 用户认证与 SHA-256 密码摘要
 
@@ -1207,7 +1209,7 @@ C Server `X` 命令期望：
 
 建议：
 
-- 新增统一 `build_user_path(username, user_path, out, out_size)`。
+- 新增统一 `storage_build_user_path(username, user_path, out, out_size)`。
 - 使用 `realpath()` 或手写规范化逻辑。
 - 对不存在但即将创建的路径单独处理父目录。
 

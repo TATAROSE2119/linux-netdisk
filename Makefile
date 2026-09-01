@@ -9,7 +9,9 @@ CLIENT_LDFLAGS = -L/opt/homebrew/lib -lreadline
 SERVER = server/server
 CLIENT = client/client
 SERVER_SRCS = \
+	server/src/epoll_server.c \
 	server/src/main.c \
+	server/src/storage.c \
 	server/src/thread_pool.c
 CLIENT_SRCS = \
 	client/src/main.c

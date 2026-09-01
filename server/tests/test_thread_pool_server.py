@@ -79,10 +79,13 @@ class ThreadPoolServerTest(unittest.TestCase):
         self._start_server(workers=1, queue_capacity=1, timeout=5)
 
         first = socket.create_connection(SERVER_ADDRESS, timeout=2)
+        first.sendall(b"V")
         time.sleep(0.1)  # Let the only worker block on the first connection.
         second = socket.create_connection(SERVER_ADDRESS, timeout=2)
-        time.sleep(0.1)  # Let accept() place the second connection in the queue.
+        second.sendall(b"V")
+        time.sleep(0.1)  # Let epoll dispatch the second connection to the queue.
         rejected = socket.create_connection(SERVER_ADDRESS, timeout=2)
+        rejected.sendall(b"V")
         rejected.settimeout(2)
 
         try:
@@ -128,6 +131,8 @@ class ThreadPoolServerTest(unittest.TestCase):
         try:
             time.sleep(0.2)
             self.assertEqual(len(list(task_directory.iterdir())), expected_threads)
+            # Idle sockets stay in epoll and must not consume all workers.
+            self.assertEqual(self._verify_missing_directory(2000), b"\x00")
         finally:
             for connection in idle_connections:
                 connection.close()
@@ -137,6 +142,29 @@ class ThreadPoolServerTest(unittest.TestCase):
 
         self.assertEqual(responses, [b"\x00"] * 100)
         self.assertEqual(len(list(task_directory.iterdir())), expected_threads)
+
+    def test_epoll_tracks_and_expires_idle_connections(self):
+        fd_directory = Path(f"/proc/{self.process.pid}/fd")
+        if not fd_directory.is_dir():
+            self.skipTest("epoll fd assertion requires Linux procfs")
+
+        fd_targets = []
+        for descriptor in fd_directory.iterdir():
+            try:
+                fd_targets.append(descriptor.readlink().as_posix())
+            except FileNotFoundError:
+                continue
+        self.assertIn("anon_inode:[eventpoll]", fd_targets)
+
+        idle = socket.create_connection(SERVER_ADDRESS, timeout=2)
+        idle.settimeout(4)
+        try:
+            self.assertEqual(idle.recv(1), b"")
+        finally:
+            idle.close()
+
+        self.assertIsNone(self.process.poll())
+        self.assertEqual(self._verify_missing_directory(3000), b"\x00")
 
     def test_invalid_or_truncated_fields_do_not_kill_workers(self):
         with socket.create_connection(SERVER_ADDRESS, timeout=2) as connection:

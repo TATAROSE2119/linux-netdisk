@@ -26,8 +26,10 @@
 #include <stdint.h>
 #include <sys/time.h>
 
-#include "thread_pool.h"
+#include "epoll_server.h"
 #include "net_io.h"
+#include "storage.h"
+#include "thread_pool.h"
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
 #define htobe64(x) OSSwapHostToBigInt64(x)
@@ -46,237 +48,6 @@
 #define MAX_PASSWORD_LENGTH 1024
 #define MAX_FILENAME_LENGTH 255
 #define MAX_PATH_LENGTH 1023
-#define STORAGE_PATH_SIZE 2048
-
-static bool is_safe_component(const char *component) {
-    return component != NULL && component[0] != '\0' &&
-           strcmp(component, ".") != 0 && strcmp(component, "..") != 0 &&
-           strchr(component, '/') == NULL;
-}
-
-static int append_path_text(char *destination, size_t destination_size,
-                            size_t *used, const char *text) {
-    size_t length = strlen(text);
-
-    if (length > destination_size - 1 - *used) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    memcpy(destination + *used, text, length);
-    *used += length;
-    destination[*used] = '\0';
-    return 0;
-}
-
-static int append_path_segment(char *destination, size_t destination_size,
-                               size_t *used, const char *segment) {
-    if (*used > 0 && destination[*used - 1] != '/' &&
-        append_path_text(destination, destination_size, used, "/") != 0) {
-        return -1;
-    }
-    return append_path_text(destination, destination_size, used, segment);
-}
-
-/* Convert a client path to a relative path and reject attempts to escape it. */
-static int normalize_relative_path(const char *input, char *output,
-                                   size_t output_size) {
-    const char *cursor = input != NULL ? input : "";
-    size_t used = 0;
-
-    if (output_size == 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    output[0] = '\0';
-
-    while (*cursor != '\0') {
-        const char *end;
-        size_t component_length;
-
-        while (*cursor == '/') {
-            cursor++;
-        }
-        if (*cursor == '\0') {
-            break;
-        }
-
-        end = strchr(cursor, '/');
-        component_length = end != NULL ? (size_t)(end - cursor) : strlen(cursor);
-        if (component_length == 1 && cursor[0] == '.') {
-            cursor += component_length;
-            continue;
-        }
-        if (component_length == 2 && cursor[0] == '.' && cursor[1] == '.') {
-            errno = EPERM;
-            return -1;
-        }
-
-        if (used > 0) {
-            if (used >= output_size - 1) {
-                errno = ENAMETOOLONG;
-                return -1;
-            }
-            output[used++] = '/';
-        }
-        if (component_length > output_size - 1 - used) {
-            errno = ENAMETOOLONG;
-            return -1;
-        }
-        memcpy(output + used, cursor, component_length);
-        used += component_length;
-        output[used] = '\0';
-        cursor += component_length;
-    }
-    return 0;
-}
-
-static int build_user_path(char *destination, size_t destination_size,
-                           const char *username, const char *path,
-                           const char *leaf) {
-    char normalized_path[MAX_PATH_LENGTH + 1];
-    size_t used = 0;
-
-    if (!is_safe_component(username) ||
-        (leaf != NULL && !is_safe_component(leaf)) ||
-        normalize_relative_path(path, normalized_path,
-                                sizeof(normalized_path)) != 0) {
-        errno = EPERM;
-        return -1;
-    }
-
-    destination[0] = '\0';
-    if (append_path_text(destination, destination_size, &used,
-                         "netdisk_data") != 0 ||
-        append_path_segment(destination, destination_size, &used,
-                            username) != 0 ||
-        (normalized_path[0] != '\0' &&
-         append_path_segment(destination, destination_size, &used,
-                             normalized_path) != 0) ||
-        (leaf != NULL &&
-         append_path_segment(destination, destination_size, &used,
-                             leaf) != 0)) {
-        return -1;
-    }
-    return 0;
-}
-
-static int join_paths(char *destination, size_t destination_size,
-                      const char *parent, const char *child) {
-    size_t used = 0;
-
-    destination[0] = '\0';
-    return append_path_text(destination, destination_size, &used, parent) == 0 &&
-           append_path_segment(destination, destination_size, &used, child) == 0
-               ? 0
-               : -1;
-}
-
-static int ensure_directory(const char *path) {
-    struct stat status;
-
-    if (mkdir(path, 0755) == 0) {
-        return 0;
-    }
-    if (errno == EEXIST && lstat(path, &status) == 0 && S_ISDIR(status.st_mode)) {
-        return 0;
-    }
-    return -1;
-}
-
-// 确保用户目录存在
-int ensure_user_dir(const char *username) {
-    char user_dir[STORAGE_PATH_SIZE];
-
-    if (build_user_path(user_dir, sizeof(user_dir), username, NULL, NULL) != 0) {
-        return -1;
-    }
-
-    if (ensure_directory("netdisk_data") != 0) {
-        printf("Failed to create netdisk_data directory: %s\n", strerror(errno));
-        return -1;
-    }
-
-    if (ensure_directory(user_dir) != 0) {
-        printf("Failed to create user directory '%s': %s\n", user_dir, strerror(errno));
-        return -1;
-    }
-    return 0;
-}
-
-// 添加递归创建目录的辅助函数
-int mkdirs(const char *path) {
-    char tmp[STORAGE_PATH_SIZE];
-    char *p = NULL;
-    size_t len;
-
-    len = strlen(path);
-    if (len >= sizeof(tmp)) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    memcpy(tmp, path, len + 1);
-    if (len == 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    if(tmp[len - 1] == '/')
-        tmp[len - 1] = 0;
-    
-    for(p = tmp + 1; *p; p++) {
-        if(*p == '/') {
-            *p = 0;
-            if (ensure_directory(tmp) != 0) {
-                printf("Failed to create directory '%s': %s\n", tmp, strerror(errno));
-                return -1;
-            }
-            *p = '/';
-        }
-    }
-    if (ensure_directory(tmp) != 0) {
-        printf("Failed to create directory '%s': %s\n", tmp, strerror(errno));
-        return -1;
-    }
-    return 0;
-}
-
-static int remove_tree(const char *path) {
-    struct stat status;
-
-    if (lstat(path, &status) != 0) {
-        return -1;
-    }
-    if (!S_ISDIR(status.st_mode)) {
-        return unlink(path);
-    }
-
-    DIR *directory = opendir(path);
-    if (directory == NULL) {
-        return -1;
-    }
-
-    int result = 0;
-    struct dirent *entry;
-    while ((entry = readdir(directory)) != NULL) {
-        char child_path[STORAGE_PATH_SIZE];
-
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-        if (join_paths(child_path, sizeof(child_path), path, entry->d_name) != 0 ||
-            remove_tree(child_path) != 0) {
-            result = -1;
-            break;
-        }
-    }
-    int saved_errno = errno;
-    closedir(directory);
-    if (result != 0) {
-        errno = saved_errno;
-        return -1;
-    }
-    return rmdir(path);
-}
 
 void sha256_string(const char *str, char *out_hex);
 
@@ -340,7 +111,7 @@ void handle_client(int conn_fd) {
             char res=1;
             if(sqlite3_step(stmt) ==SQLITE_DONE){// Execute the statement
                 //注册成功 创建用户目录
-                res = ensure_user_dir(username) == 0;
+                res = storage_ensure_user_dir(username) == 0;
             }else{
                 res=0; // Registration failed
             }
@@ -406,16 +177,17 @@ void handle_client(int conn_fd) {
         char temporary_path[STORAGE_PATH_SIZE];
         char response = 0;
 
-        if (build_user_path(dir_path, sizeof(dir_path), username, target_dir,
+        if (storage_build_user_path(dir_path, sizeof(dir_path), username, target_dir,
                             NULL) != 0 ||
-            build_user_path(filepath, sizeof(filepath), username, target_dir,
+            storage_build_user_path(filepath, sizeof(filepath), username, target_dir,
                             filename) != 0 ||
-            ensure_user_dir(username) != 0 || mkdirs(dir_path) != 0) {
+            storage_ensure_user_dir(username) != 0 ||
+            storage_mkdirs(dir_path) != 0) {
             WRITE_OR_CLEANUP(conn_fd, &response, sizeof(response));
             goto cleanup;
         }
 
-        if (join_paths(temporary_path, sizeof(temporary_path), dir_path,
+        if (storage_join_paths(temporary_path, sizeof(temporary_path), dir_path,
                        ".netdisk-upload-XXXXXX") != 0) {
             WRITE_OR_CLEANUP(conn_fd, &response, sizeof(response));
             goto cleanup;
@@ -497,7 +269,7 @@ void handle_client(int conn_fd) {
         READ_STRING_OR_CLEANUP(conn_fd, filename, MAX_FILENAME_LENGTH);
 
         char filepath[STORAGE_PATH_SIZE];
-        if (build_user_path(filepath, sizeof(filepath), username, current_dir,
+        if (storage_build_user_path(filepath, sizeof(filepath), username, current_dir,
                             filename) != 0) {
             char flag = 0;
             WRITE_OR_CLEANUP(conn_fd, &flag, sizeof(flag));
@@ -552,7 +324,7 @@ void handle_client(int conn_fd) {
 
         // 拼接用户目录
         char userdir[STORAGE_PATH_SIZE];
-        if (build_user_path(userdir, sizeof(userdir), username, NULL, NULL) != 0) {
+        if (storage_build_user_path(userdir, sizeof(userdir), username, NULL, NULL) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
             goto cleanup;
@@ -587,7 +359,7 @@ void handle_client(int conn_fd) {
             if (entry->d_type == DT_REG) {
                 // 获取文件信息
                 char filepath[STORAGE_PATH_SIZE];
-                if (join_paths(filepath, sizeof(filepath), userdir,
+                if (storage_join_paths(filepath, sizeof(filepath), userdir,
                                entry->d_name) != 0) {
                     continue;
                 }
@@ -636,8 +408,9 @@ void handle_client(int conn_fd) {
 
         char res = 0;
         char filepath[STORAGE_PATH_SIZE];
-        if (build_user_path(filepath, sizeof(filepath), username, current_dir,
-                            filename) == 0 && remove_tree(filepath) == 0) {
+        if (storage_build_user_path(filepath, sizeof(filepath), username, current_dir,
+                            filename) == 0 &&
+            storage_remove_tree(filepath) == 0) {
             res = 1;
         }
 
@@ -653,14 +426,14 @@ void handle_client(int conn_fd) {
         READ_STRING_OR_CLEANUP(conn_fd, dirpath, MAX_PATH_LENGTH);
 
         // 确保用户目录存在
-        if (ensure_user_dir(username) != 0) {
+        if (storage_ensure_user_dir(username) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
             goto cleanup;
         }
 
         char full_path[STORAGE_PATH_SIZE];
-        if (build_user_path(full_path, sizeof(full_path), username, dirpath,
+        if (storage_build_user_path(full_path, sizeof(full_path), username, dirpath,
                             NULL) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
@@ -670,7 +443,7 @@ void handle_client(int conn_fd) {
         printf("Attempting to create directory: %s\n", full_path);
 
         // 递归创建目录
-        char res = (mkdirs(full_path) == 0) ? 1 : 0;
+        char res = (storage_mkdirs(full_path) == 0) ? 1 : 0;
         if (!res) {
             printf("Failed to create directory '%s': %s\n", full_path, strerror(errno));
         } else {
@@ -688,7 +461,7 @@ void handle_client(int conn_fd) {
         READ_STRING_OR_CLEANUP(conn_fd, filepath, MAX_PATH_LENGTH);
 
         char full_path[STORAGE_PATH_SIZE];
-        if (build_user_path(full_path, sizeof(full_path), username, filepath,
+        if (storage_build_user_path(full_path, sizeof(full_path), username, filepath,
                             NULL) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
@@ -708,7 +481,7 @@ void handle_client(int conn_fd) {
 
         // 构建用户根目录路径
         char root_path[STORAGE_PATH_SIZE];
-        if (build_user_path(root_path, sizeof(root_path), username, NULL,
+        if (storage_build_user_path(root_path, sizeof(root_path), username, NULL,
                             NULL) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
@@ -729,7 +502,7 @@ void handle_client(int conn_fd) {
 
                 // 获取文件/目录信息
                 char full_path[STORAGE_PATH_SIZE];
-                if (join_paths(full_path, sizeof(full_path), root_path,
+                if (storage_join_paths(full_path, sizeof(full_path), root_path,
                                entry->d_name) != 0) {
                     continue;
                 }
@@ -778,7 +551,7 @@ void handle_client(int conn_fd) {
         READ_STRING_OR_CLEANUP(conn_fd, target_dir, MAX_PATH_LENGTH);
 
         char full_path[STORAGE_PATH_SIZE];
-        if (build_user_path(full_path, sizeof(full_path), username, target_dir,
+        if (storage_build_user_path(full_path, sizeof(full_path), username, target_dir,
                             NULL) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
@@ -826,7 +599,7 @@ void handle_client(int conn_fd) {
 
             // 获取文件信息
             char item_path[STORAGE_PATH_SIZE];
-            if (join_paths(item_path, sizeof(item_path), full_path,
+            if (storage_join_paths(item_path, sizeof(item_path), full_path,
                            entry->d_name) != 0) {
                 continue;
             }
@@ -884,9 +657,9 @@ void handle_client(int conn_fd) {
 
         char full_old_path[STORAGE_PATH_SIZE];
         char full_new_path[STORAGE_PATH_SIZE];
-        if (build_user_path(full_old_path, sizeof(full_old_path), username,
+        if (storage_build_user_path(full_old_path, sizeof(full_old_path), username,
                             old_path, NULL) != 0 ||
-            build_user_path(full_new_path, sizeof(full_new_path), username,
+            storage_build_user_path(full_new_path, sizeof(full_new_path), username,
                             new_path, NULL) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
@@ -915,7 +688,7 @@ void handle_client(int conn_fd) {
         READ_STRING_OR_CLEANUP(conn_fd, path, MAX_PATH_LENGTH);
 
         char full_path[STORAGE_PATH_SIZE];
-        if (build_user_path(full_path, sizeof(full_path), username, path,
+        if (storage_build_user_path(full_path, sizeof(full_path), username, path,
                             NULL) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
@@ -936,7 +709,7 @@ void handle_client(int conn_fd) {
         READ_STRING_OR_CLEANUP(conn_fd, dir_path, MAX_PATH_LENGTH);
 
         char full_path[STORAGE_PATH_SIZE];
-        if (build_user_path(full_path, sizeof(full_path), username, dir_path,
+        if (storage_build_user_path(full_path, sizeof(full_path), username, dir_path,
                             NULL) != 0) {
             char res = 0;
             WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
@@ -976,7 +749,7 @@ void send_directory_tree(int conn_fd, const char* dir_path, int depth) {
         }
 
         char full_path[STORAGE_PATH_SIZE];
-        if (join_paths(full_path, sizeof(full_path), dir_path,
+        if (storage_join_paths(full_path, sizeof(full_path), dir_path,
                        entry->d_name) != 0) {
             continue;
         }
@@ -1163,9 +936,16 @@ static int create_listener(size_t queue_capacity) {
         return -1;
     }
 
+    int listener_flags = fcntl(listen_fd, F_GETFL, 0);
+    if (listener_flags < 0 ||
+        fcntl(listen_fd, F_SETFL, listener_flags | O_NONBLOCK) < 0) {
+        perror("failed to make listener nonblocking");
+        close(listen_fd);
+        return -1;
+    }
 #ifndef __linux__
     if (fcntl(listen_fd, F_SETFD, FD_CLOEXEC) < 0) {
-        perror("failed to set close-on-exec on listener");
+        perror("failed to configure listener flags");
         close(listen_fd);
         return -1;
     }
@@ -1197,45 +977,6 @@ static int create_listener(size_t queue_capacity) {
     return listen_fd;
 }
 
-static int accept_client(int listen_fd, struct sockaddr_in *client_address,
-                         socklen_t *client_address_length) {
-#ifdef __linux__
-    return accept4(listen_fd, (struct sockaddr *)client_address,
-                   client_address_length, SOCK_CLOEXEC);
-#else
-    int client_fd = accept(listen_fd, (struct sockaddr *)client_address,
-                           client_address_length);
-
-    if (client_fd >= 0 && fcntl(client_fd, F_SETFD, FD_CLOEXEC) < 0) {
-        close(client_fd);
-        return -1;
-    }
-    return client_fd;
-#endif
-}
-
-static int configure_client_socket(int client_fd, size_t timeout_seconds) {
-    struct timeval timeout = {
-        .tv_sec = (time_t)timeout_seconds,
-        .tv_usec = 0,
-    };
-
-    if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-                   sizeof(timeout)) < 0) {
-        return -1;
-    }
-    if (setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout,
-                   sizeof(timeout)) < 0) {
-        return -1;
-    }
-    return 0;
-}
-
-static void close_rejected_client(int client_fd) {
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
-}
-
 static void *wait_for_shutdown_signal(void *argument) {
     struct signal_wait_context *context = argument;
     int signal_number;
@@ -1261,12 +1002,12 @@ static void *wait_for_shutdown_signal(void *argument) {
 
 int main(int argc, char **argv) {
     struct server_options options;
+    struct epoll_server_stats epoll_stats = {0};
     struct thread_pool *pool = NULL;
     struct signal_wait_context signal_context;
     pthread_t signal_thread;
     sigset_t shutdown_signals;
     bool signal_thread_started = false;
-    size_t rejected_connections = 0;
     int listen_fd = -1;
     int exit_status = EXIT_FAILURE;
     int result;
@@ -1320,54 +1061,18 @@ int main(int argc, char **argv) {
     }
     signal_thread_started = true;
 
-    printf("Server is listening on port %d (workers=%zu, queue=%zu, timeout=%zus)\n",
+    printf("Server is listening on port %d with epoll "
+           "(workers=%zu, queue=%zu, timeout=%zus)\n",
            PORT, options.worker_count, options.queue_capacity,
            options.client_timeout_seconds);
     fflush(stdout);
-    exit_status = EXIT_SUCCESS;
-
-    while (!atomic_load(&stop_requested)) {
-        struct sockaddr_in client_address;
-        socklen_t client_address_length = sizeof(client_address);
-        int client_fd;
-
-        client_fd = accept_client(listen_fd, &client_address,
-                                  &client_address_length);
-        if (client_fd < 0) {
-            if (atomic_load(&stop_requested)) {
-                break;
-            }
-            if (errno == EINTR) {
-                continue;
-            }
-            perror("accept error");
-            exit_status = EXIT_FAILURE;
-            break;
-        }
-
-        if (configure_client_socket(client_fd,
-                                    options.client_timeout_seconds) != 0) {
-            perror("failed to configure client socket");
-            close_rejected_client(client_fd);
-            continue;
-        }
-
-        result = thread_pool_submit(pool, client_fd);
-        if (result != 0) {
-            close_rejected_client(client_fd);
-            if (result == EAGAIN) {
-                rejected_connections++;
-                if (rejected_connections == 1 ||
-                    rejected_connections % 100 == 0) {
-                    fprintf(stderr,
-                            "task queue full; rejected %zu connection(s)\n",
-                            rejected_connections);
-                }
-            } else if (result != ECANCELED) {
-                fprintf(stderr, "failed to enqueue client: %s\n",
-                        strerror(result));
-            }
-        }
+    result = epoll_server_run(listen_fd, pool,
+                              options.client_timeout_seconds,
+                              &stop_requested, &epoll_stats);
+    if (result != 0) {
+        perror("epoll server loop failed");
+    } else {
+        exit_status = EXIT_SUCCESS;
     }
 
 cleanup:
@@ -1386,10 +1091,15 @@ cleanup:
     }
     thread_pool_destroy(pool);
 
-    if (rejected_connections > 0) {
+    if (epoll_stats.rejected_connections > 0) {
         fprintf(stderr, "server rejected %zu connection(s) while the queue was full\n",
-                rejected_connections);
+                epoll_stats.rejected_connections);
     }
+    fprintf(stderr,
+            "epoll stats: accepted=%zu dispatched=%zu expired=%zu\n",
+            epoll_stats.accepted_connections,
+            epoll_stats.dispatched_connections,
+            epoll_stats.expired_connections);
     fprintf(stderr, "server stopped\n");
     return exit_status;
 }

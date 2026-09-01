@@ -204,10 +204,10 @@ make DEBUG=1      # 调试模式
 make clean        # 清理
 ```
 
-### C 服务端线程池
+### C 服务端 epoll 与线程池
 
-服务端使用固定大小线程池和有界 FIFO 任务队列，默认配置为 8 个工作线程、
-128 个等待槽位和 60 秒客户端 I/O 超时：
+服务端使用 epoll 管理监听 socket 和尚未发送请求的连接，并使用固定大小线程池和
+有界 FIFO 队列执行业务。默认配置为 8 个工作线程、128 个等待槽位和 60 秒超时：
 
 ```bash
 cd server
@@ -220,7 +220,9 @@ cd server
 ./server --workers 16 --queue-capacity 256 --client-timeout 120
 ```
 
-队列满时新连接会被关闭，从而限制线程数、排队连接数和内存占用。
+空闲连接在首次可读前不会占用工作线程。队列满时已就绪的新连接会被关闭，从而限制
+线程数、排队连接数和内存占用。详细设计和全非阻塞升级路线见
+[`EPOLL_REFACTOR_GUIDE.md`](EPOLL_REFACTOR_GUIDE.md)。
 `SIGINT`、`SIGTERM` 或 `Ctrl+C` 会停止接收连接，唤醒阻塞中的工作线程并回收线程池。
 
 ## 数据库
