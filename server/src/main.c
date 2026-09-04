@@ -1,5 +1,13 @@
 #define _GNU_SOURCE
 
+/*
+ * 网盘 C 服务器主程序。
+ *
+ * main() 负责参数解析、数据库初始化、监听 socket、信号线程以及线程池的
+ * 生命周期；epoll_server 模块负责等待连接首个可读事件；handle_client()
+ * 在线程池工作线程中解析一条应用层命令。当前协议约定“一次 TCP 连接只处理
+ * 一条命令”，因此处理完成后工作线程会关闭该连接。
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +45,7 @@
 #include <endian.h>
 #endif
 
+/* 监听端口、并发配置默认值以及允许用户通过命令行设置的安全上限。 */
 #define PORT 9000
 #define DEFAULT_WORKER_COUNT 8
 #define DEFAULT_QUEUE_CAPACITY 128
@@ -44,17 +53,19 @@
 #define MAX_WORKER_COUNT 256
 #define MAX_QUEUE_CAPACITY 65536
 #define MAX_CLIENT_TIMEOUT_SECONDS 3600
+/* 客户端可变长字段的最大字节数；接收时额外预留一个字节存放 '\0'。 */
 #define MAX_USERNAME_LENGTH 128
 #define MAX_PASSWORD_LENGTH 1024
 #define MAX_FILENAME_LENGTH 255
 #define MAX_PATH_LENGTH 1023
 
+/* 密码哈希函数定义位于本文件后部，注册和登录分支都会调用。 */
 void sha256_string(const char *str, char *out_hex);
 
-
-
-
-
+/*
+ * 读取“4 字节网络序长度 + 字符串内容”。任何短读、超长字段或断连都统一
+ * 跳到 handle_client() 的 cleanup，确保数据库连接总能被关闭。
+ */
 #define READ_STRING_OR_CLEANUP(fd, buffer, maximum_length)                    \
     do {                                                                      \
         if (net_read_string((fd), (buffer), sizeof(buffer),                       \
@@ -63,6 +74,7 @@ void sha256_string(const char *str, char *out_hex);
         }                                                                     \
     } while (0)
 
+/* 完整发送固定长度响应；发送失败时进入统一资源清理路径。 */
 #define WRITE_OR_CLEANUP(fd, buffer, length)                                  \
     do {                                                                      \
         if (net_write_full((fd), (buffer), (length)) != 0) {                      \
@@ -70,13 +82,22 @@ void sha256_string(const char *str, char *out_hex);
         }                                                                     \
     } while (0)
 
-// 函数声明
+/* 递归目录树发送函数由 Y 命令调用，定义位于请求分派函数之后。 */
 void send_directory_tree(int conn_fd, const char* dir_path, int depth);
 
+/*
+ * 处理单个客户端连接中的一条命令。
+ *
+ * 命令协议概览：
+ *   R 注册，L 登录，U 上传，D 下载，F 查询用户根目录普通文件；
+ *   X 删除，M 创建目录，T 创建空文件，E 查询用户根目录树；
+ *   S 查询指定目录，N 重命名，V 验证目录，Y 查询指定目录树。
+ *
+ * 所有字符串都采用“uint32 网络序长度 + 原始字节”编码。函数不关闭 conn_fd，
+ * fd 的所有权仍在线程池；本函数只负责关闭自己打开的 SQLite、FILE 和 DIR。
+ */
 void handle_client(int conn_fd) {
-    //1.线程内自己打开数据库
-    //char buffer[1024];
-    //ssize_t n;
+    /* SQLite 连接不在线程之间共享，每个请求独立打开以简化并发访问。 */
     sqlite3 *db = NULL;
     
     if(sqlite3_open("netdisk.db", &db) != SQLITE_OK) {
@@ -85,13 +106,13 @@ void handle_client(int conn_fd) {
         goto cleanup;
     }
     sqlite3_busy_timeout(db, 5000);
-    //简单菜单：先收指令
+    /* 协议第一个字节始终是命令码；连接提前关闭则直接清理。 */
     char cmd;
     if (net_read_full(conn_fd, &cmd, sizeof(cmd)) != 0) {
         goto cleanup;
     }
 
-    if(cmd=='R'){//注册
+    if(cmd=='R'){// 注册：用户名、明文密码 -> 1 字节成功标志
         //1.读取用户名长度和用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -120,7 +141,7 @@ void handle_client(int conn_fd) {
         }
         goto cleanup;
     }
-    else if(cmd=='L'){//登录
+    else if(cmd=='L'){// 登录：用户名、明文密码 -> 1 字节验证结果
         //1.读取用户名和密码
         char username[MAX_USERNAME_LENGTH + 1];
         char password[MAX_PASSWORD_LENGTH + 1];
@@ -153,7 +174,7 @@ void handle_client(int conn_fd) {
         }
         goto cleanup;
     }
-    if(cmd=='U'){// 上传文件
+    if(cmd=='U'){// 上传：用户、目录、文件名、64 位大小、文件内容 -> 成功标志
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
 
@@ -193,6 +214,10 @@ void handle_client(int conn_fd) {
             goto cleanup;
         }
 
+        /*
+         * 先写同目录临时文件，完整落盘后再 rename 原子替换目标文件，避免
+         * 网络中断时留下一个看起来正常但内容不完整的最终文件。
+         */
         int temporary_fd = mkstemp(temporary_path);
         if (temporary_fd < 0) {
             WRITE_OR_CLEANUP(conn_fd, &response, sizeof(response));
@@ -255,7 +280,7 @@ void handle_client(int conn_fd) {
                    filepath, file_size, total_received);
         }
     }
-    else if(cmd=='D'){// 下载文件
+    else if(cmd=='D'){// 下载：用户、当前目录、文件名 -> 标志、大小、文件内容
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -317,7 +342,7 @@ void handle_client(int conn_fd) {
         }
         printf("File download successfully as %s ✅\n", filename);
         fclose(fp);
-    } else if(cmd == 'F') { // 获取文件列表
+    } else if(cmd == 'F') { // 获取用户根目录中的普通文件及其元数据
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -393,7 +418,7 @@ void handle_client(int conn_fd) {
         }
         closedir(dir);
         goto cleanup;
-    } else if(cmd == 'X') { // 删除文件或目录
+    } else if(cmd == 'X') { // 删除文件或目录；路径必须先经过用户根目录约束
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -416,7 +441,7 @@ void handle_client(int conn_fd) {
 
         WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
         goto cleanup;
-    } else if(cmd == 'M') { // mkdir command
+    } else if(cmd == 'M') { // 递归创建用户目录
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -451,7 +476,7 @@ void handle_client(int conn_fd) {
         }
         WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
         
-    } else if(cmd == 'T') { // touch command
+    } else if(cmd == 'T') { // 创建空文件；文件已存在时保持原内容不变
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -474,7 +499,7 @@ void handle_client(int conn_fd) {
         if(fp) fclose(fp);
         WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
 
-    } else if(cmd == 'E') { // tree command
+    } else if(cmd == 'E') { // 返回用户根目录第一层树条目（兼容旧客户端命令）
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -541,7 +566,7 @@ void handle_client(int conn_fd) {
         char end = 0;
         WRITE_OR_CLEANUP(conn_fd, &end, sizeof(end));
 
-    } else if(cmd == 'S') { // 获取目录列表 (List directory)
+    } else if(cmd == 'S') { // 返回指定目录的一层文件/子目录列表
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -642,7 +667,7 @@ void handle_client(int conn_fd) {
             }
         }
         closedir(dir);
-    } else if(cmd == 'N') { // 重命名文件或目录 (reName)
+    } else if(cmd == 'N') { // 在用户存储空间内重命名文件或目录
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -678,7 +703,7 @@ void handle_client(int conn_fd) {
 
         WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
         goto cleanup;
-    } else if(cmd == 'V') { // 验证目录是否存在
+    } else if(cmd == 'V') { // 验证指定逻辑路径是否存在且为目录
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -699,7 +724,7 @@ void handle_client(int conn_fd) {
         struct stat st;
         char res = (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
         WRITE_OR_CLEANUP(conn_fd, &res, sizeof(res));
-    } else if(cmd == 'Y') { // 获取指定目录的树结构
+    } else if(cmd == 'Y') { // 递归返回指定目录的树结构
         // 读取用户名
         char username[MAX_USERNAME_LENGTH + 1];
         READ_STRING_OR_CLEANUP(conn_fd, username, MAX_USERNAME_LENGTH);
@@ -731,12 +756,18 @@ void handle_client(int conn_fd) {
     }
 
 cleanup:
+    /* 所有命令分支共享这一个数据库清理出口。socket 由线程池负责关闭。 */
     if (db != NULL) {
         sqlite3_close(db);
     }
 }
 
-// 递归发送目录树结构
+/*
+ * 以深度优先顺序发送目录树。
+ * 每个条目编码为：1 字节类型、4 字节网络序名称长度、名称、4 字节深度；
+ * 整棵树结束标记由调用者发送。本函数遇到单个 stat 失败时跳过该项，网络
+ * 写入失败时停止当前层遍历。
+ */
 void send_directory_tree(int conn_fd, const char* dir_path, int depth) {
     DIR *dir = opendir(dir_path);
     if (!dir) return;
@@ -784,6 +815,10 @@ void send_directory_tree(int conn_fd, const char* dir_path, int depth) {
     closedir(dir);
 }
 
+/*
+ * 计算字符串的 SHA-256，并把 32 字节摘要展开为 64 个小写十六进制字符。
+ * 调用者必须为 out_hex 提供至少 65 字节空间（含字符串终止符）。
+ */
 void sha256_string(const char *str, char *out_hex) {
     unsigned char hash[SHA256_DIGEST_LENGTH];
     SHA256((const unsigned char *)str, strlen(str), hash);
@@ -793,19 +828,23 @@ void sha256_string(const char *str, char *out_hex) {
 }
 
 
+/* 启动参数解析后的强类型配置，随后传给监听器、epoll 和线程池。 */
 struct server_options {
     size_t worker_count;
     size_t queue_capacity;
     size_t client_timeout_seconds;
 };
 
+/* 信号等待线程需要监听的信号集合及用于唤醒 epoll 的监听 fd。 */
 struct signal_wait_context {
     sigset_t signals;
     int listen_fd;
 };
 
+/* 信号线程写、主线程和 epoll 循环读的原子停机标志。 */
 static atomic_bool stop_requested = ATOMIC_VAR_INIT(false);
 
+/* 输出命令行用法；stream 允许 --help 写 stdout、参数错误写 stderr。 */
 static void print_usage(FILE *stream, const char *program) {
     fprintf(stream,
             "Usage: %s [--workers N] [--queue-capacity N] "
@@ -813,6 +852,9 @@ static void print_usage(FILE *stream, const char *program) {
             program);
 }
 
+/*
+ * 严格解析十进制 size_t：拒绝空串、负号、尾随字符、溢出和范围外数值。
+ */
 static int parse_size(const char *text, size_t minimum, size_t maximum,
                       size_t *result) {
     char *end = NULL;
@@ -832,6 +874,10 @@ static int parse_size(const char *text, size_t minimum, size_t maximum,
     return 0;
 }
 
+/*
+ * 解析工作线程数、队列容量和客户端超时。
+ * 返回 0 表示继续启动，1 表示已经打印帮助，-1 表示参数无效。
+ */
 static int parse_options(int argc, char **argv, struct server_options *options) {
     static const struct option long_options[] = {
         {"workers", required_argument, NULL, 'w'},
@@ -885,6 +931,10 @@ static int parse_options(int argc, char **argv, struct server_options *options) 
     return 0;
 }
 
+/*
+ * 创建/打开认证数据库，启用 WAL 并确保 users 表存在。
+ * 每次请求仍会在工作线程内创建自己的 SQLite 连接。
+ */
 static int initialize_database(void) {
     static const char *schema =
         "PRAGMA journal_mode=WAL;"
@@ -920,6 +970,10 @@ static int initialize_database(void) {
     return 0;
 }
 
+/*
+ * 创建监听 socket，设置非阻塞和 close-on-exec，绑定所有网卡的 PORT。
+ * backlog 取任务队列容量，但在转换到 int 时做上限保护。
+ */
 static int create_listener(size_t queue_capacity) {
     struct sockaddr_in server_address = {0};
     int reuse_address = 1;
@@ -977,6 +1031,10 @@ static int create_listener(size_t queue_capacity) {
     return listen_fd;
 }
 
+/*
+ * 同步等待 SIGINT/SIGTERM。收到信号后设置原子标志并 shutdown 监听 socket，
+ * 使可能阻塞的事件循环及时醒来并进入统一关闭流程。
+ */
 static void *wait_for_shutdown_signal(void *argument) {
     struct signal_wait_context *context = argument;
     int signal_number;
@@ -1000,6 +1058,10 @@ static void *wait_for_shutdown_signal(void *argument) {
     return NULL;
 }
 
+/*
+ * 服务器进程入口：按“配置 -> 信号 -> 数据库 -> listener -> 线程池 -> epoll”
+ * 顺序启动，并在 cleanup 中按依赖关系逆序释放资源。
+ */
 int main(int argc, char **argv) {
     struct server_options options;
     struct epoll_server_stats epoll_stats = {0};
@@ -1066,6 +1128,7 @@ int main(int argc, char **argv) {
            PORT, options.worker_count, options.queue_capacity,
            options.client_timeout_seconds);
     fflush(stdout);
+    /* epoll 循环占用主线程，直到信号线程设置 stop_requested。 */
     result = epoll_server_run(listen_fd, pool,
                               options.client_timeout_seconds,
                               &stop_requested, &epoll_stats);
@@ -1076,6 +1139,10 @@ int main(int argc, char **argv) {
     }
 
 cleanup:
+    /*
+     * 若启动后续步骤失败，主动唤醒信号线程；随后关闭 listener，并最后销毁
+     * 线程池，确保工作线程不再使用任何主线程资源。
+     */
     if (signal_thread_started) {
         if (!atomic_load(&stop_requested)) {
             result = pthread_kill(signal_thread, SIGTERM);

@@ -1,5 +1,12 @@
 #define _GNU_SOURCE
 
+/*
+ * Linux epoll 前端调度器。
+ *
+ * 连接建立后不会立刻占用工作线程，而是先以非阻塞方式挂入 epoll；只有客户
+ * 端真正发送了首字节，连接才恢复为阻塞模式并提交给线程池。这样慢连接或
+ * 空闲连接只占用少量内存和一个 fd，不会耗尽固定数量的工作线程。
+ */
 #include "epoll_server.h"
 #include "thread_pool.h"
 
@@ -16,19 +23,27 @@
 #include <time.h>
 #include <unistd.h>
 
+/* 单次 epoll_wait 最多取出的事件数，以及检查空闲连接超时的周期。 */
 #define EPOLL_BATCH_SIZE 256
 #define EPOLL_TICK_MILLISECONDS 1000
 
+/* event.data.ptr 指向对象的首成员，通过该标记区分监听 socket 与客户端。 */
 enum event_source_type {
     EVENT_SOURCE_LISTENER,
     EVENT_SOURCE_PENDING_CLIENT,
 };
 
+/* 所有事件源的公共头；必须作为具体事件对象的第一个成员。 */
 struct event_source {
     enum event_source_type type;
     int fd;
 };
 
+/*
+ * 尚未提交给线程池的连接。
+ * accepted_at 使用单调时钟记录，避免系统时间被校准时影响超时判断；双向链表
+ * 让任意 epoll 事件都能以 O(1) 从待处理集合中删除。
+ */
 struct pending_connection {
     struct event_source source;
     struct timespec accepted_at;
@@ -36,6 +51,7 @@ struct pending_connection {
     struct pending_connection *next;
 };
 
+/* epoll 事件循环所需的全部运行状态，仅由运行 epoll_server_run 的线程访问。 */
 struct epoll_server {
     int epoll_fd;
     int listen_fd;
@@ -47,6 +63,7 @@ struct epoll_server {
     struct pending_connection *pending_head;
 };
 
+/* 把新连接插入待处理链表头部。 */
 static void pending_insert(struct epoll_server *server,
                            struct pending_connection *connection)
 {
@@ -58,6 +75,7 @@ static void pending_insert(struct epoll_server *server,
     server->pending_head = connection;
 }
 
+/* 从待处理双向链表摘除连接，但不关闭 fd，也不释放连接对象。 */
 static void pending_remove(struct epoll_server *server,
                            struct pending_connection *connection)
 {
@@ -73,6 +91,7 @@ static void pending_remove(struct epoll_server *server,
     connection->next = NULL;
 }
 
+/* 可靠关闭 socket；shutdown 用于唤醒潜在阻塞 I/O，close 释放 fd。 */
 static void close_socket(int fd)
 {
     if (fd < 0) {
@@ -82,6 +101,10 @@ static void close_socket(int fd)
     close(fd);
 }
 
+/*
+ * 完整销毁仍由 epoll 管理的连接：先取消监听，再关闭 fd、摘链并释放内存。
+ * ENOENT/EBADF 表明 fd 已不在 epoll 中，不影响后续清理。
+ */
 static void close_pending(struct epoll_server *server,
                           struct pending_connection *connection)
 {
@@ -98,6 +121,10 @@ static void close_pending(struct epoll_server *server,
     free(connection);
 }
 
+/*
+ * 连接即将交给采用阻塞 I/O 的业务处理器：清除 O_NONBLOCK，并为收发设置
+ * 超时，避免协议只发送一半时永久占住工作线程。
+ */
 static int configure_blocking_client(int client_fd, size_t timeout_seconds)
 {
     struct timeval timeout = {
@@ -117,6 +144,10 @@ static int configure_blocking_client(int client_fd, size_t timeout_seconds)
     return 0;
 }
 
+/*
+ * 关闭已经从 epoll 和待处理链表摘除、但未能提交给线程池的连接。
+ * queue_full 为真时同步累计并限频输出过载统计。
+ */
 static void reject_detached_connection(struct epoll_server *server,
                                        struct pending_connection *connection,
                                        bool queue_full)
@@ -135,6 +166,10 @@ static void reject_detached_connection(struct epoll_server *server,
     free(connection);
 }
 
+/*
+ * 将已可读连接从 epoll 移交线程池。
+ * 提交成功后 fd 所有权转给线程池；失败时本函数负责关闭 fd 和释放连接对象。
+ */
 static void dispatch_pending(struct epoll_server *server,
                              struct pending_connection *connection)
 {
@@ -170,6 +205,7 @@ static void dispatch_pending(struct epoll_server *server,
     }
 }
 
+/* Linux accept(2) 文档列出的瞬时网络错误，可以直接重试而无需终止服务器。 */
 static bool retryable_accept_error(int error)
 {
     return error == ECONNABORTED || error == ENETDOWN || error == EPROTO ||
@@ -178,6 +214,10 @@ static bool retryable_accept_error(int error)
            error == ENETUNREACH;
 }
 
+/*
+ * 使用 accept4() 一次性排空监听 socket 的就绪连接。
+ * 每个新连接以 EPOLLONESHOT 监听首个可读事件；事件触发前不会重复通知。
+ */
 static int accept_pending_connections(struct epoll_server *server)
 {
     for (;;) {
@@ -226,6 +266,7 @@ static int accept_pending_connections(struct epoll_server *server)
     }
 }
 
+/* 使用秒和纳秒差值判断连接等待时间是否达到超时阈值。 */
 static bool has_expired(const struct timespec *now,
                         const struct timespec *accepted_at,
                         size_t timeout_seconds)
@@ -239,6 +280,7 @@ static bool has_expired(const struct timespec *now,
     return seconds >= 0 && (size_t)seconds >= timeout_seconds;
 }
 
+/* 遍历待处理链表并关闭长期未发送任何数据的连接。 */
 static void expire_pending_connections(struct epoll_server *server)
 {
     struct pending_connection *connection = server->pending_head;
@@ -259,6 +301,7 @@ static void expire_pending_connections(struct epoll_server *server)
     }
 }
 
+/* 服务器停止或事件循环失败时，释放全部仍挂在 epoll 上的客户端。 */
 static void close_all_pending(struct epoll_server *server)
 {
     while (server->pending_head != NULL) {
@@ -266,6 +309,11 @@ static void close_all_pending(struct epoll_server *server)
     }
 }
 
+/*
+ * 建立 epoll 实例并运行事件循环，直到 stop_requested 被信号线程置位。
+ * listener_source 的生命周期覆盖整个循环，因此可安全存入 event.data.ptr；
+ * pending_connection 则在关闭或成功移交线程池时动态释放。
+ */
 int epoll_server_run(int listen_fd, struct thread_pool *pool,
                      size_t client_timeout_seconds,
                      const atomic_bool *stop_requested,
@@ -324,6 +372,7 @@ int epoll_server_run(int listen_fd, struct thread_pool *pool,
             break;
         }
 
+        /* 逐个处理本批事件；同一 pending 连接使用 EPOLLONESHOT，不会重复出现。 */
         for (int index = 0; index < event_count; index++) {
             struct event_source *source = events[index].data.ptr;
             uint32_t flags = events[index].events;
@@ -357,6 +406,7 @@ int epoll_server_run(int listen_fd, struct thread_pool *pool,
     }
 
 cleanup:
+    /* 无论正常停机还是错误退出，都先释放待处理连接，再关闭 epoll 实例。 */
     close_all_pending(&server);
     close(server.epoll_fd);
     return status;

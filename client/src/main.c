@@ -1,3 +1,10 @@
+/*
+ * 网盘命令行客户端。
+ *
+ * 本文件包含交互式命令循环、Readline 自动补全、登录状态、远程文件操作和
+ * 上传下载进度显示。客户端遵循“一次连接只发送一条命令”的协议：多数业务
+ * 函数会临时连接服务器、完成一次请求并关闭 socket。
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +23,10 @@
 
 #include "net_io.h"
 
-// 跨平台的字节序转换函数
+/*
+ * 将服务器传回的 64 位大端整数转换为主机字节序。主流平台使用系统实现，
+ * 其他平台使用两个 32 位 ntohl 组合成兼容版本。
+ */
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
 #define be64toh(x) OSSwapBigToHostInt64(x)
@@ -39,33 +49,45 @@ static inline uint64_t be64toh(uint64_t big_endian_64bits) {
 }
 #endif
 
+/* 创建并连接一个新的服务器 socket；定义位于文件后部。 */
 int connect_to_server(void);
 
+/* 当前客户端连接目标。修改地址或端口时应与服务器配置保持一致。 */
 #define PORT 9000
 #define server_IP "127.0.0.1"  // 本地部署，使用localhost
 
-char g_username[64]={0}; // Global variable to store username
+/* 当前登录用户名；空字符串表示尚未登录。 */
+char g_username[64]={0};
 
-// 添加当前工作目录
+/* 客户端维护的远程逻辑工作目录，始终以 '/' 开头，不是本机目录。 */
 char g_current_dir[1024] = "/";
 
-// 存储服务器文件和目录列表的全局变量
+/* Readline 补全缓存的最大条目数及单个名称容量。 */
 #define MAX_FILES 1000
 #define MAX_FILENAME_LEN 256
+
+/* 从服务器目录列表缓存下来的最小条目信息。 */
 typedef struct {
     char name[MAX_FILENAME_LEN];
     int is_dir;  // 1表示目录，0表示文件
 } FileEntry;
 
+/*
+ * 当前目录的补全缓存。客户端为单线程交互程序，因此无需加锁；切换目录或
+ * 修改远程文件后应刷新该缓存。
+ */
 FileEntry server_entries[MAX_FILES];
 int server_entries_count = 0;
 
-// 清理服务器文件列表
+/* 将补全缓存标记为空；静态数组内容无需逐项释放。 */
 void clear_server_entries() {
     server_entries_count = 0;
 }
 
-// 规范化路径（处理 . 和 ..）
+/*
+ * 就地规范化客户端逻辑路径：去掉 "."，按栈语义处理 ".."，并保证结果
+ * 以 '/' 开头。parts 中的每个分量由本函数分配并在重建路径后释放。
+ */
 void normalize_path(char *path) {
     char temp_path[1024];
     strcpy(temp_path, path);  // 创建副本避免strtok修改原字符串
@@ -109,7 +131,11 @@ void normalize_path(char *path) {
     }
 }
 
-// 获取服务器文件列表
+/*
+ * 发送 S 命令获取 current_dir 的一层目录内容，用结果重建自动补全缓存。
+ * 协议字段依次为命令码、用户名、目录；每个响应条目包含类型和名称。
+ * 网络失败时保留一个空缓存，并关闭本函数创建的 socket。
+ */
 void fetch_server_entries(const char *current_dir) {
     if (strlen(g_username) == 0) return;
     
@@ -170,7 +196,10 @@ void fetch_server_entries(const char *current_dir) {
     close(sockfd);
 }
 
-// 服务器文件名补全生成器（仅文件）
+/*
+ * Readline 文件补全生成器。state 为 0 时重置遍历位置，后续调用逐个返回
+ * 匹配的普通文件名。返回的 strdup 内存交给 Readline 释放。
+ */
 char* server_file_generator(const char* text, int state) {
     static int list_index, len;
     char* name;
@@ -190,7 +219,9 @@ char* server_file_generator(const char* text, int state) {
     return NULL;
 }
 
-// 服务器所有条目补全生成器（文件和目录）
+/*
+ * Readline 全条目补全生成器；目录名附加 '/'，让用户可以继续补全下一级。
+ */
 char* server_all_generator(const char* text, int state) {
     static int list_index, len;
     char* name;
@@ -215,7 +246,10 @@ char* server_all_generator(const char* text, int state) {
     return NULL;
 }
 
-// 目录补全生成器（只返回目录）
+/*
+ * Readline 目录补全生成器。除服务器返回的目录外，还根据当前位置提供
+ * "./" 和 "../" 两个逻辑目录候选。
+ */
 char* dir_generator(const char* text, int state) {
     static int list_index, len, special_state;
     char* name;
@@ -255,13 +289,13 @@ char* dir_generator(const char* text, int state) {
     return NULL;
 }
 
-// 命令列表
+/* NULL 结尾的顶层命令表，供 command_generator 顺序遍历。 */
 char* commands[] = {
     "register", "login", "upload", "download", "list", "delete", "exit", "help",
     "mkdir", "touch", "cd", "pwd", "tree", NULL
 };
 
-// 补全回调函数
+/* 顶层命令名生成器；遵循 Readline generator 的 state 调用约定。 */
 char* command_generator(const char* text, int state) {
     static int list_index, len;
     char* name;
@@ -279,8 +313,7 @@ char* command_generator(const char* text, int state) {
     return NULL;
 }
 
-// 补全函数
-// 获取命令行中的参数个数
+/* 统计一行中由空白字符分隔的参数数量，不修改输入字符串。 */
 int count_args(const char* line) {
     int count = 0;
     int in_word = 0;
@@ -299,6 +332,11 @@ int count_args(const char* line) {
     return count;
 }
 
+/*
+ * Readline 的统一补全入口。
+ * 行首补全命令；cd 只补全目录；download 只补全文件；delete 同时补全两者；
+ * upload 根据参数位置在本地文件补全和远程目录补全之间切换。
+ */
 char** command_completion(const char* text, int start, int end) {
     // 获取当前行的第一个词（命令）
     char* cmd_start = rl_line_buffer;
@@ -388,6 +426,10 @@ char** command_completion(const char* text, int start, int end) {
     return NULL;
 }
 
+/*
+ * 发送 R 注册命令。请求依次携带用户名和明文密码，服务器负责哈希及落库；
+ * 返回 1 表示注册并创建用户目录成功。函数负责关闭自己创建的 socket。
+ */
 int register_user(const char *username, const char *password) {
     int sockfd;
     struct sockaddr_in server_addr;// Server address structure
@@ -430,6 +472,10 @@ int register_user(const char *username, const char *password) {
     }
 }
 
+/*
+ * 发送 L 登录命令。验证成功后更新全局用户名并刷新根目录补全缓存；
+ * 验证失败不会改变当前会话状态。
+ */
 int login_user(const char *username, const char *password) {
     int sockfd;
     struct sockaddr_in server_addr;
@@ -473,6 +519,10 @@ int login_user(const char *username, const char *password) {
 }
 
 // 进度条显示函数
+/*
+ * 在同一终端行显示传输进度、百分比和速率。transferred/total 使用字节，
+ * speed 使用字节每秒；调用结束后由上传/下载函数打印换行。
+ */
 void show_progress(const char* filename, const char* type, long transferred, long total, double speed) {
     const int bar_width = 40;
     float progress = (float)transferred / total;
@@ -502,6 +552,10 @@ void show_progress(const char* filename, const char* type, long transferred, lon
 }
 
 
+/*
+ * 按“4 字节网络序长度 + 字符串内容”的格式发送一个上传协议字段。
+ * 使用 send_all 保证短写时继续发送，成功返回 0，失败返回 -1。
+ */
 static int send_upload_field(int socket_fd, const char *value) {
     size_t length = strlen(value);
     uint32_t network_length;
@@ -518,6 +572,12 @@ static int send_upload_field(int socket_fd, const char *value) {
     return send_all(socket_fd, value, length);
 }
 
+/*
+ * 上传单个本地文件到指定远程目录。
+ * U 命令字段顺序：用户名、目标目录、文件名、64 位文件大小（高低各 32 位）、
+ * 文件内容。只有收到服务器成功响应后才报告完成，所有退出路径都会关闭文件
+ * 和 socket。
+ */
 void upload_file(const char *filepath, const char *target_dir) {
     int sockfd = connect_to_server();
     if (sockfd < 0) return;
@@ -645,6 +705,10 @@ void upload_file(const char *filepath, const char *target_dir) {
     close(sockfd);
 }
 
+/*
+ * 从当前远程目录下载一个文件到客户端工作目录。
+ * D 命令先读取存在标志和 64 位大小，再持续接收文件内容并更新进度。
+ */
 void download_file(const char *filename) {
     int sockfd = connect_to_server();
     if (sockfd < 0) return;
@@ -722,6 +786,7 @@ void download_file(const char *filename) {
     printf("✅ 文件 '%s' 下载完成\n", filename);
 }
 
+/* 把字节数转换为最多一位小数的 B/KB/MB/GB/TB 人类可读字符串。 */
 void format_size(int64_t size, char *buf) {
     const char* units[] = {"B", "KB", "MB", "GB", "TB"};
     int unit = 0;
@@ -733,6 +798,10 @@ void format_size(int64_t size, char *buf) {
     sprintf(buf, "%.1f %s", size_d, units[unit]);
 }
 
+/*
+ * 使用已经连接的 sockfd 发送 S 命令，读取当前目录条目及大小、修改时间并
+ * 打印表格。与多数辅助函数不同，本函数会在返回前关闭传入的 sockfd。
+ */
 void send_list_files(int sockfd, const char* username) {
     char cmd = 'S';  // 使用正确的命令字符
     write(sockfd, &cmd, sizeof(cmd));
@@ -844,6 +913,10 @@ void send_list_files(int sockfd, const char* username) {
     close(sockfd);
 }
 
+/*
+ * 使用已经连接的 sockfd 发送 X 删除命令并打印结果。
+ * 本函数不关闭 sockfd，所有权仍属于调用者，便于外层循环批量删除多个条目。
+ */
 void send_delete_file(int sockfd, const char* username, const char* filename) {
     char cmd = 'X';
     write(sockfd, &cmd, sizeof(cmd));
@@ -879,6 +952,10 @@ void send_delete_file(int sockfd, const char* username, const char* filename) {
     }
 }
 
+/*
+ * 发送 M 命令创建远程目录。相对路径基于 g_current_dir 展开，绝对逻辑路径
+ * 会去掉开头的 '/' 后发送；函数自行建立并关闭连接。
+ */
 void send_mkdir(const char* path) {
     if (strlen(g_username) == 0) {
         printf("请先登录！\n");
@@ -925,6 +1002,7 @@ void send_mkdir(const char* path) {
     close(sockfd);
 }
 
+/* 发送 T 命令创建远程空文件；已有文件内容不变，路径规则与 send_mkdir() 相同。 */
 void send_touch(const char* path) {
     if (strlen(g_username) == 0) {
         printf("请先登录！\n");
@@ -971,6 +1049,10 @@ void send_touch(const char* path) {
     close(sockfd);
 }
 
+/*
+ * 发送 Y 命令获取当前目录的递归树。响应由若干“类型、名称、深度”记录组成，
+ * 类型 0 是结束标记，depth 用于输出树形缩进。
+ */
 void send_tree() {
     if (strlen(g_username) == 0) {
         printf("请先登录！\n");
@@ -1050,6 +1132,11 @@ void send_tree() {
     close(sockfd);
 }
 
+/*
+ * 创建 IPv4 TCP socket 并连接 server_IP:PORT。
+ * 成功返回由调用者负责关闭的 fd；任一步失败都会关闭已创建的 socket 并
+ * 返回 -1。
+ */
 int connect_to_server() {
     int sockfd;
     struct sockaddr_in server_addr;
@@ -1077,6 +1164,10 @@ int connect_to_server() {
 }
 
 
+/*
+ * 客户端入口：安装 Readline 补全回调，循环读取并解析命令，调用对应协议
+ * 函数。readline() 返回的行和为 strtok 创建的副本都在每轮结束时释放。
+ */
 int main(void) {
     rl_attempted_completion_function = command_completion;
     char prompt[1024];
